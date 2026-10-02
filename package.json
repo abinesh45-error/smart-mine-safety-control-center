@@ -1,0 +1,31 @@
+{
+  "name": "smart-mine-safety-control-center",
+  "version": "2.4.0",
+  "description": "AI-Based Mine Gas Leakage Detection and Smart Evacuation System web dashboard and IoT telemetry platform",
+  "main": "index.html",
+  "scripts": {
+    "start": "python esp32_mock_server.py 5000",
+    "serve": "npx serve -l 5000 .",
+    "test": "node -e \"console.log('Validating files...'); require('fs').accessSync('index.html'); require('fs').accessSync('styles.css'); require('fs').accessSync('app.js'); console.log('All files verified successfully!')\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/smart-mine-safety-control-center.git"
+  },
+  "keywords": [
+    "mine-safety",
+    "gas-detection",
+    "smart-evacuation",
+    "scada",
+    "iot",
+    "esp32",
+    "mq4",
+    "mq7",
+    "mq135",
+    "dht11",
+    "open-source",
+    "emergency-system"
+  ],
+  "author": "Abinesh TS and Project Contributors",
+  "license": "MIT"
+}

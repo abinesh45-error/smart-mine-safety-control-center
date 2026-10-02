@@ -1,0 +1,16 @@
+# ==============================================================================
+# SMART MINE SAFETY CONTROL CENTER - PYTHON DEPENDENCIES
+# Note: The built-in mock server (esp32_mock_server.py) requires ONLY Python 3.8+
+# standard library modules (http.server, urllib, json, random, sys).
+# 
+# The optional packages below are for advanced community extensions (MQTT, Flask):
+# ==============================================================================
+
+# Optional lightweight web frameworks (for scaling REST APIs)
+# flask>=2.0.0
+
+# Optional IoT protocol bridges (for connecting MQTT brokers to web sockets)
+# paho-mqtt>=1.6.1
+
+# Optional test automation
+# requests>=2.28.0
