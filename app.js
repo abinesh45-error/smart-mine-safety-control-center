@@ -24,7 +24,7 @@
     soundMuted: false,
     viewMode: 'control-room', // 'control-room' | 'worker'
     pollingEnabled: false,
-    apiEndpoint: 'http://localhost:5000/api/data',
+    apiEndpoint: 'https://smart-mine-safety-control-center.onrender.com/api/data',
 
     // Rolling history for sparkline charts (10 samples)
     history: {
