@@ -92,23 +92,38 @@ A critical innovation of this project is the **Hazard-Avoidance Dynamic Path Rou
 
 ---
 
-## 💻 5. REST API JSON Specification
+## 💻 5. REST API JSON Specification (Render Cloud Integration)
 
-The web dashboard is decoupled from the hardware, accepting JSON data payloads from an ESP32 or IoT gateway:
+The web dashboard is fully deployed on Render at:
+**`https://smart-mine-safety-control-center.onrender.com`**
 
-```json
+### A. ESP32 Ingestion Endpoint (`POST /api/esp32/data`)
+Physical ESP32 microcontrollers transmit sensor readings to this endpoint over HTTPS:
+
+```http
+POST /api/esp32/data HTTP/1.1
+Host: smart-mine-safety-control-center.onrender.com
+Content-Type: application/json
+X-API-Key: MINE_SECURE_ESP32_TOKEN_2026
+
 {
-  "zone": "M2",
-  "location": "Mine Zone M2",
-  "methane": 1800,
-  "co": 1200,
-  "mq135": 1400,
-  "temperature": 38.0,
-  "humidity": 65.0,
-  "status": "WARNING",
-  "safeRoute": "M2 -> M1 -> MAIN EXIT"
+  "device_id": "ESP32_M1",
+  "zone": "M1",
+  "mq4": 1234,
+  "mq7": 856,
+  "mq135": 642,
+  "temperature": 32.5,
+  "humidity": 68.0,
+  "risk_level": "MEDIUM",
+  "status": "WARNING"
 }
 ```
+
+### B. Live Telemetry & Device Status Stream (`GET /api/esp32/data`)
+Dashboard automatically polls this endpoint every 2.5 seconds to detect online/offline state and receive real-time data without page refreshes.
+
+### C. Recent Sensor History Query (`GET /api/esp32/history`)
+Queries recent telemetry packets stored in the SQLite database (`mine_safety.db`).
 
 ---
 

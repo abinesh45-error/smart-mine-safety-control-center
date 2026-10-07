@@ -2617,3 +2617,132 @@ body[data-view-mode="worker"] .sensor-cards-grid {
   font-size: 0.8rem;
   color: var(--safe-green);
 }
+
+/* ==========================================================================
+   SECTION 10: ESP32 LIVE DEVICE STATUS & SECTION 11: SENSOR HISTORY
+   ========================================================================== */
+.section-esp32-status {
+  grid-column: span 12;
+}
+
+.esp-status-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.esp-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+}
+
+.esp-info-box {
+  background: var(--bg-darkest);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all var(--trans-fast);
+}
+
+.esp-info-box:hover {
+  border-color: var(--border-bright);
+}
+
+.esp-box-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-subtle);
+  letter-spacing: 0.8px;
+}
+
+.esp-box-val {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.2;
+}
+
+.esp-box-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.section-sensor-history {
+  grid-column: span 12;
+}
+
+.badge-risk-low {
+  background: var(--safe-green-dim);
+  color: var(--safe-green);
+  border: 1px solid rgba(0, 230, 118, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+}
+
+.badge-risk-medium {
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--neon-cyan);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+}
+
+.badge-risk-high {
+  background: var(--warn-yellow-dim);
+  color: var(--warn-yellow);
+  border: 1px solid rgba(255, 179, 0, 0.4);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+}
+
+.badge-risk-critical {
+  background: var(--danger-red-dim);
+  color: var(--danger-red);
+  border: 1px solid rgba(255, 23, 68, 0.6);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  animation: blink 0.8s infinite alternate;
+}
+
+body[data-view-mode="worker"] .section-esp32-status {
+  order: 2.5;
+}
+
+body[data-view-mode="worker"] .section-sensor-history {
+  order: 10;
+}
+
+@media (max-width: 1200px) {
+  .esp-telemetry-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .esp-telemetry-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 500px) {
+  .esp-telemetry-grid {
+    grid-template-columns: 1fr;
+  }
+}

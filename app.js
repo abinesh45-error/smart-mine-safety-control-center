@@ -23,8 +23,15 @@
     safeRoute: 'M2 -> M1 -> MAIN EXIT',
     soundMuted: false,
     viewMode: 'control-room', // 'control-room' | 'worker'
-    pollingEnabled: false,
-    apiEndpoint: 'https://smart-mine-safety-control-center.onrender.com/api/data',
+    pollingEnabled: true,
+    apiEndpoint: '/api/esp32/data',
+    historyEndpoint: '/api/esp32/history',
+    esp32Online: false,
+    esp32DeviceId: 'ESP32_M1',
+    esp32LastSeen: 'No data yet',
+    esp32LastSeenSec: null,
+    esp32TriggerSensor: 'None (All Nominal)',
+    esp32RiskLevel: 'LOW',
 
     // Rolling history for sparkline charts (10 samples)
     history: {
@@ -390,7 +397,22 @@
     btnCloseOsFooter: document.getElementById('btn-close-os-footer'),
     btnFooterOsInfo: document.getElementById('btn-footer-os-info'),
     btnFooterExportJson: document.getElementById('btn-footer-export-json'),
-    btnDownloadTelemetry: document.getElementById('btn-download-telemetry')
+    btnDownloadTelemetry: document.getElementById('btn-download-telemetry'),
+
+    // Section 10: ESP32 Device Status & Section 11: History
+    esp32HeaderDot: document.getElementById('esp32-header-dot'),
+    esp32HeaderStatusText: document.getElementById('esp32-header-status-text'),
+    esp32LiveBadge: document.getElementById('esp32-live-badge'),
+    esp32CardDeviceId: document.getElementById('esp32-card-device-id'),
+    esp32CardZone: document.getElementById('esp32-card-zone'),
+    esp32CardLocation: document.getElementById('esp32-card-location'),
+    esp32CardLastSeen: document.getElementById('esp32-card-last-seen'),
+    esp32CardLastSeenAgo: document.getElementById('esp32-card-last-seen-ago'),
+    esp32CardStatusText: document.getElementById('esp32-card-status-text'),
+    esp32CardRiskLevel: document.getElementById('esp32-card-risk-level'),
+    esp32CardTriggerSensor: document.getElementById('esp32-card-trigger-sensor'),
+    historyTbody: document.getElementById('history-tbody'),
+    historyCountLabel: document.getElementById('history-count-label')
   };
 
   // ==========================================================================
@@ -648,6 +670,45 @@
 
     // 11. Section 9: Buzzer and LED Hardware Status
     updateHardwareActuators(State.status);
+
+    // 12. Section 10: ESP32 Hardware Status
+    updateEsp32Card();
+  }
+
+  function updateEsp32Card() {
+    if (DOM.esp32HeaderDot) {
+      DOM.esp32HeaderDot.className = `indicator-dot ${State.esp32Online ? 'online' : 'offline'}`;
+      DOM.esp32HeaderStatusText.textContent = State.esp32Online ? 'ONLINE' : 'OFFLINE';
+    }
+    if (DOM.esp32LiveBadge) {
+      DOM.esp32LiveBadge.className = `status-pill ${State.esp32Online ? 'status-safe' : 'status-danger'}`;
+      DOM.esp32LiveBadge.textContent = State.esp32Online ? '🟢 ONLINE' : '🔴 OFFLINE';
+    }
+    if (DOM.esp32CardDeviceId) DOM.esp32CardDeviceId.textContent = State.esp32DeviceId || 'ESP32_M1';
+    if (DOM.esp32CardZone) DOM.esp32CardZone.textContent = State.zone || 'M1';
+    if (DOM.esp32CardLocation) DOM.esp32CardLocation.textContent = State.location || `Mine Zone ${State.zone}`;
+    if (DOM.esp32CardLastSeen) DOM.esp32CardLastSeen.textContent = State.esp32LastSeen || 'No data yet';
+    if (DOM.esp32CardLastSeenAgo) {
+      DOM.esp32CardLastSeenAgo.textContent = State.esp32Online
+        ? (State.esp32LastSeenSec !== null ? `${State.esp32LastSeenSec}s ago` : 'Active stream')
+        : 'Waiting for ESP32 stream...';
+    }
+    if (DOM.esp32CardStatusText) {
+      DOM.esp32CardStatusText.textContent = State.esp32Online ? 'ONLINE (STREAMING)' : 'OFFLINE (STANDBY)';
+      DOM.esp32CardStatusText.style.color = State.esp32Online ? 'var(--safe-green)' : 'var(--danger-red)';
+    }
+    if (DOM.esp32CardRiskLevel) {
+      const risk = (State.esp32RiskLevel || 'LOW').toUpperCase();
+      DOM.esp32CardRiskLevel.textContent = risk;
+      DOM.esp32CardRiskLevel.className = `esp-box-val badge-risk-${risk.toLowerCase()}`;
+    }
+    if (DOM.esp32CardTriggerSensor) {
+      const trigger = State.esp32TriggerSensor || 'None (All Nominal)';
+      DOM.esp32CardTriggerSensor.textContent = trigger;
+      DOM.esp32CardTriggerSensor.style.color = (trigger !== 'None (All Nominal)')
+        ? 'var(--danger-red)'
+        : 'var(--safe-green)';
+    }
   }
 
   function updateSensorPill(pillEl, cardEl, val, warnThresh, dangerThresh) {
@@ -944,56 +1005,126 @@
   }
 
   // Poll real or mock ESP32 REST Endpoint
-  async function pollEsp32Data() {
-    const url = State.apiEndpoint || 'http://localhost:5000/api/data';
-    try {
-      DOM.sysStatusDot.className = 'indicator-dot online';
-      DOM.sysStatusText.textContent = 'SYNCING';
+  let lastLoggedTrigger = null;
 
+  async function pollEsp32Data() {
+    const url = State.apiEndpoint || '/api/esp32/data';
+    try {
       const resp = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
       if (!resp.ok) throw new Error(`HTTP error ${resp.status}`);
       const data = await resp.json();
 
-      // Expected payload format:
-      // {
-      //   "zone": "M2",
-      //   "location": "Mine Zone M2",
-      //   "methane": 1800,
-      //   "co": 1200,
-      //   "mq135": 1400,
-      //   "temperature": 38,
-      //   "humidity": 65,
-      //   "status": "WARNING",
-      //   "safeRoute": "M2 -> M1 -> MAIN EXIT"
-      // }
+      // Check if rich ESP32 payload
+      if (data.online !== undefined) {
+        State.esp32Online = data.online;
+        State.esp32DeviceId = data.device_id || 'ESP32_M1';
+        State.esp32LastSeen = data.last_seen_timestamp || 'Active';
+        State.esp32LastSeenSec = data.last_seen_seconds_ago;
+        State.esp32TriggerSensor = data.trigger_sensor || 'None (All Nominal)';
+        State.esp32RiskLevel = data.risk_level || 'LOW';
 
-      if (data.zone) State.zone = data.zone;
-      if (data.location) State.location = data.location;
-      if (data.methane !== undefined) State.methane = Number(data.methane);
-      if (data.co !== undefined) State.co = Number(data.co);
-      if (data.mq135 !== undefined) State.mq135 = Number(data.mq135);
-      if (data.temperature !== undefined) State.temperature = Number(data.temperature);
-      if (data.humidity !== undefined) State.humidity = Number(data.humidity);
-      if (data.safeRoute) State.safeRoute = data.safeRoute;
+        if (data.online) {
+          if (data.zone) State.zone = data.zone;
+          if (data.location) State.location = data.location;
+          if (data.mq4 !== undefined) State.methane = Number(data.mq4);
+          if (data.mq7 !== undefined) State.co = Number(data.mq7);
+          if (data.mq135 !== undefined) State.mq135 = Number(data.mq135);
+          if (data.temperature !== undefined) State.temperature = Number(data.temperature);
+          if (data.humidity !== undefined) State.humidity = Number(data.humidity);
+          if (data.safeRoute) State.safeRoute = data.safeRoute;
 
-      // Push history
-      const pushHist = (arr, val) => {
-        arr.push(val);
-        if (arr.length > 10) arr.shift();
-      };
-      pushHist(State.history.mq4, State.methane);
-      pushHist(State.history.mq7, State.co);
-      pushHist(State.history.mq135, State.mq135);
-      pushHist(State.history.temp, State.temperature);
-      pushHist(State.history.hum, State.humidity);
+          // Alert Center update if trigger sensor changed
+          if (data.trigger_sensor && data.trigger_sensor !== 'None (All Nominal)' && data.trigger_sensor !== lastLoggedTrigger) {
+            lastLoggedTrigger = data.trigger_sensor;
+            addAlertItem(data.status === 'EMERGENCY' ? 'red' : 'yellow',
+                         `ALERT: ${data.trigger_sensor}`,
+                         `Zone ${State.zone} telemetry breached safety ceiling. Dispatched via ${State.esp32DeviceId}.`);
+          } else if (data.trigger_sensor === 'None (All Nominal)' && lastLoggedTrigger !== null) {
+            lastLoggedTrigger = null;
+          }
+
+          // Push sparklines history
+          const pushHist = (arr, val) => {
+            arr.push(val);
+            if (arr.length > 10) arr.shift();
+          };
+          pushHist(State.history.mq4, State.methane);
+          pushHist(State.history.mq7, State.co);
+          pushHist(State.history.mq135, State.mq135);
+          pushHist(State.history.temp, State.temperature);
+          pushHist(State.history.hum, State.humidity);
+        }
+      } else {
+        // Compatibility with legacy /api/data
+        if (data.zone) State.zone = data.zone;
+        if (data.location) State.location = data.location;
+        if (data.methane !== undefined) State.methane = Number(data.methane);
+        if (data.co !== undefined) State.co = Number(data.co);
+        if (data.mq135 !== undefined) State.mq135 = Number(data.mq135);
+        if (data.temperature !== undefined) State.temperature = Number(data.temperature);
+        if (data.humidity !== undefined) State.humidity = Number(data.humidity);
+        if (data.safeRoute) State.safeRoute = data.safeRoute;
+        State.esp32Online = data.online || false;
+      }
 
       DOM.sysStatusDot.className = 'indicator-dot online';
-      DOM.sysStatusText.textContent = 'ONLINE (ESP32)';
+      DOM.sysStatusText.textContent = State.esp32Online ? 'ONLINE (ESP32)' : 'ONLINE (CLOUD)';
       renderUI();
     } catch (err) {
       console.warn('ESP32 REST poll warning:', err.message);
       DOM.sysStatusDot.className = 'indicator-dot offline';
-      DOM.sysStatusText.textContent = 'OFFLINE';
+      DOM.sysStatusText.textContent = 'CONNECTING';
+      State.esp32Online = false;
+      renderUI();
+    }
+  }
+
+  // Fetch recent sensor readings from SQLite database
+  async function fetchSensorHistory() {
+    const url = State.historyEndpoint || '/api/esp32/history';
+    try {
+      const resp = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data.history || !DOM.historyTbody) return;
+
+      if (data.history.length === 0) {
+        DOM.historyTbody.innerHTML = `
+          <tr>
+            <td colspan="10" style="text-align: center; color: var(--text-subtle); padding: 18px;">
+              Waiting for live ESP32 telemetry packets from Render...
+            </td>
+          </tr>
+        `;
+        if (DOM.historyCountLabel) DOM.historyCountLabel.textContent = '0 READINGS';
+        return;
+      }
+
+      DOM.historyTbody.innerHTML = '';
+      data.history.forEach(item => {
+        const row = document.createElement('tr');
+        const riskClass = `badge-risk-${(item.risk_level || 'low').toLowerCase()}`;
+        const statusClass = `status-pill status-${(item.status || 'safe').toLowerCase()}`;
+        row.innerHTML = `
+          <td class="mono" style="font-size: 0.76rem;">${item.timestamp}</td>
+          <td><span class="worker-tag">${item.device_id}</span></td>
+          <td><span class="zone-pill pill-cyan">${item.zone}</span></td>
+          <td class="mono font-bold">${Math.round(item.mq4)} ppm</td>
+          <td class="mono font-bold">${Math.round(item.mq7)} ppm</td>
+          <td class="mono font-bold">${Math.round(item.mq135)} ppm</td>
+          <td class="mono">${item.temperature.toFixed(1)} °C</td>
+          <td class="mono">${Math.round(item.humidity)} %</td>
+          <td><span class="${riskClass}">${item.risk_level}</span></td>
+          <td><span class="${statusClass}">${item.status}</span></td>
+        `;
+        DOM.historyTbody.appendChild(row);
+      });
+
+      if (DOM.historyCountLabel) {
+        DOM.historyCountLabel.textContent = `${data.history.length} READINGS`;
+      }
+    } catch (err) {
+      console.warn('History fetch warning:', err.message);
     }
   }
 
@@ -1265,16 +1396,29 @@
     renderAlerts();
     renderUI();
 
-    // Regular interval: 1-second cadence for real-time sensor simulation or polling
+    // Initial fetch of live ESP32 data and SQLite history
+    if (State.pollingEnabled) {
+      pollEsp32Data();
+      fetchSensorHistory();
+    }
+
+    // Regular interval: cadence for live ESP32 polling or sensor simulation
     setInterval(() => {
       if (State.pollingEnabled) {
         pollEsp32Data();
       } else {
         tickSensorNoise();
       }
-    }, 1200);
+    }, 2500);
 
-    // Periodic buzzer pulse cadence check (every 10 seconds for Safe heartbeat)
+    // Periodic sensor history refresh from SQLite database
+    setInterval(() => {
+      if (State.pollingEnabled) {
+        fetchSensorHistory();
+      }
+    }, 5000);
+
+    // Periodic buzzer pulse cadence check (every 8 seconds for heartbeat)
     setInterval(() => {
       if (State.status === 'SAFE') {
         triggerBuzzerCadence('SAFE');

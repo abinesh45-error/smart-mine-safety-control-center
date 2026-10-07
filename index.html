@@ -58,6 +58,14 @@
         </div>
 
         <div class="telemetry-pill">
+          <span class="tele-label">ESP32 DEVICE</span>
+          <div class="tele-val">
+            <span class="indicator-dot offline" id="esp32-header-dot"></span>
+            <span id="esp32-header-status-text">OFFLINE</span>
+          </div>
+        </div>
+
+        <div class="telemetry-pill">
           <span class="tele-label">CURRENT ZONE</span>
           <div class="tele-val highlight-cyan" id="current-zone-val">M1</div>
         </div>
@@ -891,6 +899,102 @@
         </div>
       </section>
 
+      <!-- ================= SECTION 10: ESP32 LIVE DEVICE STATUS ================= -->
+      <section class="card section-esp32-status" id="esp32-status-card">
+        <div class="card-header">
+          <div class="header-left">
+            <div class="section-icon">📟</div>
+            <div>
+              <h3 class="card-title">ESP32 DEVICE STATUS &amp; HARDWARE TELEMETRY</h3>
+              <span class="card-subtitle">Edge IoT microcontroller connection, Render REST ingestion &amp; sensor trigger diagnostics</span>
+            </div>
+          </div>
+          <div class="esp-status-badge-wrap">
+            <span class="status-pill status-danger" id="esp32-live-badge">🔴 OFFLINE</span>
+          </div>
+        </div>
+
+        <div class="esp-telemetry-grid">
+          <div class="esp-info-box">
+            <span class="esp-box-label">DEVICE IDENTIFIER</span>
+            <strong class="esp-box-val highlight-cyan" id="esp32-card-device-id">ESP32_M1</strong>
+            <span class="esp-box-sub">Hardware ID</span>
+          </div>
+
+          <div class="esp-info-box">
+            <span class="esp-box-label">CURRENT ZONE</span>
+            <strong class="esp-box-val highlight-cyan" id="esp32-card-zone">M1</strong>
+            <span class="esp-box-sub" id="esp32-card-location">Mine Zone M1</span>
+          </div>
+
+          <div class="esp-info-box">
+            <span class="esp-box-label">LAST DATA RECEIVED</span>
+            <strong class="esp-box-val mono" id="esp32-card-last-seen">No data yet</strong>
+            <span class="esp-box-sub" id="esp32-card-last-seen-ago">Waiting for ESP32 stream...</span>
+          </div>
+
+          <div class="esp-info-box">
+            <span class="esp-box-label">HARDWARE STATUS</span>
+            <strong class="esp-box-val" id="esp32-card-status-text">OFFLINE</strong>
+            <span class="esp-box-sub" id="esp32-card-timeout-note">Auto-detects offline in 25s</span>
+          </div>
+
+          <div class="esp-info-box">
+            <span class="esp-box-label">GAS RISK LEVEL</span>
+            <strong class="esp-box-val" id="esp32-card-risk-level">LOW</strong>
+            <span class="esp-box-sub">AI Multi-Gas Composite</span>
+          </div>
+
+          <div class="esp-info-box">
+            <span class="esp-box-label">TRIGGER SENSOR ALERT</span>
+            <strong class="esp-box-val" id="esp32-card-trigger-sensor">None (All Nominal)</strong>
+            <span class="esp-box-sub">Threshold breach detector</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SECTION 11: RECENT SENSOR HISTORY ================= -->
+      <section class="card section-sensor-history" id="sensor-history-card">
+        <div class="card-header">
+          <div class="header-left">
+            <div class="section-icon">📈</div>
+            <div>
+              <h3 class="card-title">RECENT SENSOR HISTORY (LIVE SQLITE DATABASE)</h3>
+              <span class="card-subtitle">Chronological record of sensor telemetry packets stored in database on Render</span>
+            </div>
+          </div>
+          <div class="worker-count-pill">
+            <span>PACKETS LOGGED: <strong id="history-count-label">0 READINGS</strong></span>
+          </div>
+        </div>
+
+        <div class="workers-table-wrap">
+          <table class="industrial-table">
+            <thead>
+              <tr>
+                <th>TIME</th>
+                <th>DEVICE ID</th>
+                <th>ZONE</th>
+                <th>MQ-4 (CH₄)</th>
+                <th>MQ-7 (CO)</th>
+                <th>MQ-135</th>
+                <th>TEMP (°C)</th>
+                <th>HUMIDITY (%)</th>
+                <th>RISK LEVEL</th>
+                <th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr>
+                <td colspan="10" style="text-align: center; color: var(--text-subtle); padding: 18px;">
+                  Waiting for live ESP32 telemetry packets from Render...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
     </main>
 
     <!-- FOOTER -->
@@ -1004,22 +1108,27 @@
 
         <!-- Real ESP32 REST API Connector Config -->
         <div class="sim-section">
-          <h4 class="sim-sec-title">LIVE ESP32 HARDWARE REST API INTEGRATION</h4>
+          <h4 class="sim-sec-title">LIVE ESP32 HARDWARE REST API &amp; RENDER CLOUD INTEGRATION</h4>
           <div class="esp-config-box">
             <div class="esp-input-row">
-              <label for="esp32-endpoint">ESP32 JSON Endpoint URL:</label>
-              <input type="text" id="esp32-endpoint" class="input-text-industrial" value="http://localhost:5000/api/data" placeholder="e.g. http://192.168.4.1/data or /api/data">
+              <label for="esp32-endpoint">Render Live Stream Endpoint (GET):</label>
+              <input type="text" id="esp32-endpoint" class="input-text-industrial" value="/api/esp32/data" placeholder="e.g. /api/esp32/data or https://smart-mine-safety-control-center.onrender.com/api/esp32/data">
+            </div>
+            <div class="esp-input-row">
+              <label for="esp32-api-token">Device Security API Key (X-API-Key):</label>
+              <input type="text" id="esp32-api-token" class="input-text-industrial" value="MINE_SECURE_ESP32_TOKEN_2026" readonly>
             </div>
             <div class="esp-toggles-row">
               <label class="toggle-wrap">
-                <input type="checkbox" id="check-enable-polling">
+                <input type="checkbox" id="check-enable-polling" checked>
                 <span class="toggle-slider"></span>
-                <span>Enable Real ESP32 Live Polling</span>
+                <span>Auto-Poll Live ESP32 Hardware Stream (Every 2.5s)</span>
               </label>
               <button id="btn-fetch-once" class="btn-sm">Poll Now</button>
             </div>
             <p class="esp-hint-code">
-              Expected JSON Payload format: <code>{"zone": "M2", "methane": 1800, "co": 1200, "mq135": 1400, "temperature": 38, "humidity": 65, "status": "WARNING", "safeRoute": "M2 -> M1 -> MAIN EXIT"}</code>
+              ESP32 Transmission URL: <code>POST https://smart-mine-safety-control-center.onrender.com/api/esp32/data</code><br>
+              Payload: <code>{"device_id":"ESP32_M1","zone":"M1","mq4":1234,"mq7":856,"mq135":642,"temperature":32.5,"humidity":68,"risk_level":"MEDIUM","status":"WARNING"}</code>
             </p>
           </div>
         </div>
