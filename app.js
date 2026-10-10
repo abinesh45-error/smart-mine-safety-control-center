@@ -1,7 +1,7 @@
 /**
- * SMART MINE SAFETY CONTROL CENTER - CORE ENGINE
+ * SMART MINE SAFETY CONTROL CENTER - CORE CLIENT ENGINE
  * AI-Based Mine Gas Leakage Detection and Smart Evacuation System
- * College Prototype Architecture
+ * Fail-Safe SCADA Dashboard & Worker HUD Platform
  */
 
 (function () {
@@ -11,67 +11,145 @@
   // 1. STATE & CONFIGURATION
   // ==========================================================================
   const State = {
-    zone: 'M2',
-    location: 'Mine Zone M2',
+    // Active Node Telemetry (Ingested from Server)
+    node_id: 'ESP32_M1',
+    zone: 'M1',
+    location: 'Mine Zone M1',
     methane: 420,       // MQ-4 (ppm)
     co: 18,             // MQ-7 (ppm)
-    mq135: 110,         // MQ-135 (ppm)
-    temperature: 27.4,  // DHT11 (°C)
+    toxic: 110,         // MQ-135 (ppm)
+    temp: 27.4,         // DHT11 (°C)
     humidity: 58,       // DHT11 (% RH)
-    status: 'SAFE',     // SAFE | WARNING | EMERGENCY
+    alarm_level: 'SAFE',// SAFE | WARNING | EVACUATE | SENSOR_FAULT
+    fan_on: false,
+    uptime: 0,
+    serverRiskScore: 0.0,
+    riskComponents: {},
+
+    // Status: SAFE | WARNING | EVACUATE | SENSOR_FAULT | UNKNOWN | OFFLINE
+    status: 'UNKNOWN',  // Fail-safe default: UNKNOWN until valid server telemetry arrives
     dangerZone: null,   // null | 'M1' | 'M2' | 'M3'
-    safeRoute: 'M2 -> M1 -> MAIN EXIT',
-    soundMuted: false,
-    viewMode: 'control-room', // 'control-room' | 'worker'
+    contaminatedZones: [],
+    safeRoute: 'NO DATA - SENSOR OFFLINE', // Fail-safe default
+    routes: {},
+    zones: {},
+
+    // System Modes: 'LIVE' | 'DEMO' (LIVE is primary default)
+    mode: 'LIVE',
     pollingEnabled: true,
     apiEndpoint: '/api/esp32/data',
     historyEndpoint: '/api/esp32/history',
+
+    // Edge Node Registry & Heartbeat Tracking
     esp32Online: false,
-    esp32DeviceId: 'ESP32_M1',
-    esp32LastSeen: 'No data yet',
     esp32LastSeenSec: null,
-    esp32TriggerSensor: 'None (All Nominal)',
-    esp32RiskLevel: 'LOW',
+    esp32LastSeenTimestamp: null,
+    esp32TriggerSensor: 'No Sensor Connected',
+    esp32RiskLevel: 'UNKNOWN',
+    activeNodesCount: 0,
+    nodes: {},
 
-    // Rolling history for sparkline charts (10 samples)
+    // Audio & UX State
+    soundMuted: true, // Requires explicit user click to activate sound
+    audioContextUnlocked: false,
+    silenceUntil: 0,  // 2-minute snooze timestamp
+    lastAudibleStatus: 'UNKNOWN',
+    viewMode: 'control-room', // 'control-room' | 'worker'
+    activeTab: 'overview',
+
+    // Rolling History for Trend Sparklines (10 samples)
     history: {
-      mq4: [390, 410, 420, 415, 430, 425, 418, 422, 420, 420],
-      mq7: [16, 18, 17, 19, 18, 17, 18, 19, 18, 18],
-      mq135: [105, 108, 112, 110, 115, 112, 108, 110, 110, 110],
-      temp: [26.8, 27.0, 27.2, 27.1, 27.3, 27.4, 27.3, 27.5, 27.4, 27.4],
-      hum: [56, 57, 58, 59, 58, 57, 58, 58, 58, 58]
+      mq4: [420],
+      mq7: [18],
+      toxic: [110],
+      temp: [27.4],
+      hum: [58]
     },
+    lastPushedTimestamp: null,
 
-    // Workers Status Mock Data
+    // Workers Status Tracking Table
     workers: [
       { id: 'W-01', name: 'Worker 01', zone: 'M1', role: 'Shift Lead', status: 'SAFE', evac: 'STATIONARY / WORKING', hr: 98 },
       { id: 'W-02', name: 'Worker 02', zone: 'M2', role: 'Excavator Operator', status: 'SAFE', evac: 'STATIONARY / WORKING', hr: 102 },
       { id: 'W-03', name: 'Worker 03', zone: 'M3', role: 'Ventilation Tech', status: 'SAFE', evac: 'STATIONARY / WORKING', hr: 88 }
     ],
 
-    // Real-time Event Alerts
-    alerts: [
-      { type: 'green', title: 'SYSTEM NORMAL', time: '20:50:10', desc: 'Baseline atmospheric conditions validated across all sectors M1, M2, M3.' },
-      { type: 'yellow', title: 'HIGH TEMPERATURE DETECTED', time: '20:48:22', desc: 'Thermal sensor DHT11 recorded 37.8°C transient spike in Zone M3.' },
-      { type: 'red', title: 'GAS LEAK DETECTED IN M2', time: '20:45:00', desc: 'MQ-4 Methane gas detected at 1,820 PPM. Threshold breached.' },
-      { type: 'red', title: 'EVACUATION REQUIRED', time: '20:45:02', desc: 'Smart route triggered: Workers diverted to Tunnel M1 ➔ MAIN EXIT.' },
-      { type: 'red', title: 'RESCUE TEAM ALERTED', time: '20:45:05', desc: 'SMS alert dispatched to emergency mine rescue brigade via GSM.' },
-      { type: 'red', title: 'AMBULANCE ALERTED', time: '20:45:07', desc: 'Medical emergency triage notified. Surface ambulance dispatched.' }
-    ]
+    // Real-Time Incident Log (Fake seeded alerts eliminated)
+    alerts: []
   };
 
-  // Sensor Thresholds for Classification
+  // Canonical Shared Threshold Table (Demo values for laboratory prototype)
   const THRESHOLDS = {
-    mq4: { warn: 1000, danger: 2500, max: 5000 },
-    mq7: { warn: 50, danger: 200, max: 1000 },
-    mq135: { warn: 300, danger: 800, max: 2000 },
-    temp: { warn: 35.0, danger: 45.0, max: 60 },
-    hum: { lowWarn: 40, highWarn: 80 }
+    methane: { warn: 1000, danger: 2500 },
+    co:      { warn: 50,   danger: 200 },
+    toxic:   { warn: 300,  danger: 800 },
+    temp:    { warn: 35.0, danger: 45.0 },
+    hum:     { lowWarn: 40, highWarn: 80 }
+  };
+
+  // Mine Tunnel Evacuation Routing Graph:
+  // M1: [M2, EXIT]
+  // M2: [M1, M3, AUX]
+  // M3: [M2, AUX]
+  // AUX: [EXIT]
+  const MINE_GRAPH = {
+    'M1': ['M2', 'EXIT'],
+    'M2': ['M1', 'M3', 'AUX'],
+    'M3': ['M2', 'AUX'],
+    'AUX': ['EXIT']
+  };
+
+  const DISPLAY_MAP = {
+    'M1': 'M1',
+    'M2': 'M2',
+    'M3': 'M3',
+    'AUX': 'AUXILIARY ESCAPE SHAFT',
+    'EXIT': 'MAIN EXIT'
+  };
+
+  // Hazard Escalation Severity Hierarchy (used to re-arm 2-min snooze on escalation)
+  const SEVERITY_ORDER = {
+    'UNKNOWN': 0,
+    'OFFLINE': 0,
+    'SAFE': 1,
+    'WARNING': 2,
+    'SENSOR_FAULT': 2,
+    'EVACUATE': 3,
+    'EMERGENCY': 3
   };
 
   // ==========================================================================
-  // 2. AUDIO SYNTHESIZER (WEB AUDIO API)
-  // Hardware Piezo Buzzer & Alarm Simulator (No external audio files required)
+  // 2. BFS TUNNEL ROUTING ALGORITHM
+  // ==========================================================================
+  function bfsFindRoute(workerZone, hazardZones) {
+    if (workerZone === 'EXIT') return 'MAIN EXIT';
+    const queue = [[workerZone]];
+    const visited = new Set([workerZone]);
+
+    while (queue.length > 0) {
+      const path = queue.shift();
+      const current = path[path.length - 1];
+
+      if (current === 'EXIT') {
+        return path.map(n => DISPLAY_MAP[n] || n).join(' ➔ ');
+      }
+
+      const neighbors = MINE_GRAPH[current] || [];
+      for (const neighbor of neighbors) {
+        if (visited.has(neighbor)) continue;
+        if (neighbor !== 'EXIT' && hazardZones.includes(neighbor)) continue;
+
+        visited.add(neighbor);
+        queue.push([...path, neighbor]);
+      }
+    }
+
+    return 'NO SAFE ROUTE';
+  }
+
+  // ==========================================================================
+  // 3. AUDIO SYNTHESIZER (WEB AUDIO API)
+  // Compliant with browser autoplay policies: activates only after user click
   // ==========================================================================
   let audioCtx = null;
 
@@ -79,16 +157,16 @@
     if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
   }
 
   function playBuzzerTone(freq = 880, duration = 0.12, type = 'square') {
     if (State.soundMuted) return;
     try {
       initAudio();
-      if (!audioCtx) return;
-      if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-      }
+      if (!audioCtx || audioCtx.state === 'suspended') return;
 
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -96,7 +174,7 @@
       osc.type = type;
       osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
 
-      gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
 
       osc.connect(gain);
@@ -105,26 +183,23 @@
       osc.start();
       osc.stop(audioCtx.currentTime + duration);
     } catch (e) {
-      console.warn('Audio play suppressed:', e);
+      console.warn('Audio tone suppressed:', e);
     }
   }
 
-  // Play hardware alert cadence: 1 beep (Safe), 2 beeps (Warning), 3 beeps (Danger)
+  // Unified Cadence: 2 beeps (Warning), 3 beeps (Evacuate / Emergency)
   function triggerBuzzerCadence(status) {
     if (State.soundMuted) return;
-    if (status === 'SAFE') {
-      playBuzzerTone(900, 0.08, 'sine');
-    } else if (status === 'WARNING') {
+    if (status === 'WARNING' || status === 'SENSOR_FAULT') {
       playBuzzerTone(1050, 0.1, 'triangle');
       setTimeout(() => playBuzzerTone(1050, 0.1, 'triangle'), 180);
-    } else if (status === 'EMERGENCY') {
+    } else if (status === 'EVACUATE' || status === 'EMERGENCY') {
       playBuzzerTone(1350, 0.14, 'square');
       setTimeout(() => playBuzzerTone(1350, 0.14, 'square'), 180);
       setTimeout(() => playBuzzerTone(1600, 0.22, 'sawtooth'), 360);
     }
   }
 
-  // Optional Voice Emergency Annunciation
   function announceEmergencyVoice(text) {
     if (State.soundMuted || !window.speechSynthesis) return;
     try {
@@ -136,91 +211,6 @@
     } catch (e) {
       console.warn('Speech synthesis error:', e);
     }
-  }
-
-  // ==========================================================================
-  // 3. AI RISK EVALUATION & EVACUATION ROUTE CALCULATION
-  // ==========================================================================
-  function calculateSafetyState(data) {
-    const ch4 = data.methane;
-    const co = data.co;
-    const aqi = data.mq135;
-    const temp = data.temperature;
-
-    // Component risks (0 to 100%)
-    const riskCh4 = Math.min(100, Math.round((ch4 / THRESHOLDS.mq4.danger) * 100));
-    const riskCo = Math.min(100, Math.round((co / THRESHOLDS.mq7.danger) * 100));
-    const riskAqi = Math.min(100, Math.round((aqi / THRESHOLDS.mq135.danger) * 100));
-    const riskTemp = Math.min(100, Math.round(Math.max(0, (temp - 20) / (THRESHOLDS.temp.danger - 20) * 100)));
-
-    // Overall Composite Score (weighted AI index prioritizing extreme single gas breach)
-    const compositeMax = Math.max(riskCh4, riskCo, riskAqi, riskTemp);
-    const overallScore = Math.min(100, Math.round(compositeMax * 0.75 + (riskCh4 + riskCo + riskAqi + riskTemp) / 4 * 0.25));
-
-    // Determine State
-    let status = 'SAFE';
-    let dangerZone = null;
-
-    if (ch4 >= THRESHOLDS.mq4.danger || co >= THRESHOLDS.mq7.danger || aqi >= THRESHOLDS.mq135.danger || temp >= THRESHOLDS.temp.danger) {
-      status = 'EMERGENCY';
-      dangerZone = data.zone || 'M2';
-    } else if (ch4 >= THRESHOLDS.mq4.warn || co >= THRESHOLDS.mq7.warn || aqi >= THRESHOLDS.mq135.warn || temp >= THRESHOLDS.temp.warn) {
-      status = 'WARNING';
-      dangerZone = data.zone || 'M2';
-    } else {
-      status = 'SAFE';
-      dangerZone = null;
-    }
-
-    // Dynamic Smart Evacuation Route calculation
-    // Constraint: "Do NOT route workers through a hazardous zone"
-    let safeRoute = '';
-    const currentZone = data.zone || 'M1';
-
-    if (status === 'SAFE') {
-      if (currentZone === 'M1') safeRoute = 'M1 ➔ MAIN EXIT';
-      else if (currentZone === 'M2') safeRoute = 'M2 ➔ M1 ➔ MAIN EXIT';
-      else if (currentZone === 'M3') safeRoute = 'M3 ➔ M2 ➔ M1 ➔ MAIN EXIT';
-    } else {
-      // Emergency or Warning condition
-      if (dangerZone === 'M2') {
-        if (currentZone === 'M2') {
-          // Worker in hazard zone M2 must flee toward M1
-          safeRoute = 'M2 ➔ M1 ➔ MAIN EXIT';
-        } else if (currentZone === 'M3') {
-          // Worker in deep mine M3 CANNOT pass through M2 hazard!
-          // AI triggers the Auxiliary Air Escape Shaft!
-          safeRoute = 'M3 ➔ AUXILIARY ESCAPE SHAFT ➔ MAIN EXIT';
-        } else if (currentZone === 'M1') {
-          safeRoute = 'M1 ➔ MAIN EXIT';
-        }
-      } else if (dangerZone === 'M1') {
-        // Entry zone M1 is blocked!
-        safeRoute = `${currentZone} ➔ AUXILIARY ESCAPE SHAFT ➔ MAIN EXIT`;
-      } else if (dangerZone === 'M3') {
-        // Deep mine M3 is hazard
-        if (currentZone === 'M3') {
-          safeRoute = 'M3 ➔ M2 ➔ M1 ➔ MAIN EXIT';
-        } else if (currentZone === 'M2') {
-          safeRoute = 'M2 ➔ M1 ➔ MAIN EXIT';
-        } else {
-          safeRoute = 'M1 ➔ MAIN EXIT';
-        }
-      } else {
-        safeRoute = `${currentZone} ➔ M1 ➔ MAIN EXIT`;
-      }
-    }
-
-    return {
-      status,
-      dangerZone,
-      safeRoute,
-      riskCh4,
-      riskCo,
-      riskAqi,
-      riskTemp,
-      overallScore
-    };
   }
 
   // ==========================================================================
@@ -237,6 +227,8 @@
     // Header elements
     sysStatusDot: document.getElementById('sys-status-dot'),
     sysStatusText: document.getElementById('sys-status-text'),
+    esp32HeaderDot: document.getElementById('esp32-header-dot'),
+    esp32HeaderStatusText: document.getElementById('esp32-header-status-text'),
     currentZoneVal: document.getElementById('current-zone-val'),
     mineLocationVal: document.getElementById('mine-location-val'),
     lastUpdatedClock: document.getElementById('last-updated-clock'),
@@ -245,7 +237,33 @@
     btnToggleSound: document.getElementById('btn-toggle-sound'),
     soundIconOn: document.getElementById('sound-icon-on'),
     soundIconOff: document.getElementById('sound-icon-off'),
-    btnOpenSim: document.getElementById('btn-open-sim'),
+    btnUnlockAudio: document.getElementById('btn-unlock-audio'),
+    audioUnlockIcon: document.getElementById('audio-unlock-icon'),
+    audioUnlockLabel: document.getElementById('audio-unlock-label'),
+
+    // Persistent System Status Bar
+    statusBarMode: document.getElementById('status-bar-mode'),
+    statusBarAge: document.getElementById('status-bar-age'),
+    statusBarNode: document.getElementById('status-bar-node'),
+    statusBarNodesCount: document.getElementById('status-bar-nodes-count'),
+    statusBarRisk: document.getElementById('status-bar-risk'),
+
+    // 4 Tabs Navigation
+    tabBtns: document.querySelectorAll('.tab-nav-btn'),
+    tabPanels: {
+      'overview': document.getElementById('tab-panel-overview'),
+      'map-route': document.getElementById('tab-panel-map-route'),
+      'trends': document.getElementById('tab-panel-trends'),
+      'alerts': document.getElementById('tab-panel-alerts')
+    },
+    tabBadgeAlerts: document.getElementById('tab-badge-alerts'),
+
+    // Mobile Worker HUD Banner
+    workerHudBanner: document.getElementById('worker-hud-banner'),
+    hudArrow: document.getElementById('hud-arrow'),
+    hudStatus: document.getElementById('hud-status'),
+    hudExitPath: document.getElementById('hud-exit-path'),
+    hudZone: document.getElementById('hud-zone'),
 
     // Section 1: Live Safety Status
     safetyStatusCard: document.getElementById('safety-status-card'),
@@ -282,7 +300,7 @@
     mapNetworkStatus: document.getElementById('map-network-status'),
     pinBgW2: document.getElementById('pin-bg-w2'),
 
-    // Section 2: Sensor Monitoring
+    // Section 2: Sensor Monitoring Cards
     valMq4: document.getElementById('val-mq4'),
     pillMq4: document.getElementById('pill-mq4'),
     cardMq4: document.getElementById('card-mq4'),
@@ -330,7 +348,7 @@
     w3SafetyBadge: document.getElementById('w3-safety-badge'),
     w3EvacBadge: document.getElementById('w3-evac-badge'),
 
-    // Section 8: Emergency Response
+    // Section 8: Emergency Response Protocol
     respStatePill: document.getElementById('resp-state-pill'),
     rcControlRoom: document.getElementById('rc-control-room'),
     rcStatusCr: document.getElementById('rc-status-cr'),
@@ -361,15 +379,29 @@
     fanStateTitle: document.getElementById('fan-state-title'),
     fanDutyCycle: document.getElementById('fan-duty-cycle'),
 
+    // Section 10: ESP32 Device Status & Section 11: History
+    esp32LiveBadge: document.getElementById('esp32-live-badge'),
+    esp32CardDeviceId: document.getElementById('esp32-card-device-id'),
+    esp32CardZone: document.getElementById('esp32-card-zone'),
+    esp32CardLocation: document.getElementById('esp32-card-location'),
+    esp32CardLastSeen: document.getElementById('esp32-card-last-seen'),
+    esp32CardLastSeenAgo: document.getElementById('esp32-card-last-seen-ago'),
+    esp32CardStatusText: document.getElementById('esp32-card-status-text'),
+    esp32CardRiskLevel: document.getElementById('esp32-card-risk-level'),
+    esp32CardTriggerSensor: document.getElementById('esp32-card-trigger-sensor'),
+    historyTbody: document.getElementById('history-tbody'),
+    historyCountLabel: document.getElementById('history-count-label'),
+
     // Section 7: Alert Feed
     alertFeed: document.getElementById('alert-feed'),
     alertCountPill: document.getElementById('alert-count-pill'),
     btnClearAlerts: document.getElementById('btn-clear-alerts'),
 
-    // Simulator Modal
-    simModal: document.getElementById('sim-modal'),
-    btnCloseSim: document.getElementById('btn-close-sim'),
-    btnCloseSimFooter: document.getElementById('btn-close-sim-footer'),
+    // Developer & Demo Drawer
+    btnToggleDevDrawer: document.getElementById('btn-toggle-dev-drawer'),
+    devDrawerPanel: document.getElementById('dev-drawer-panel'),
+    devDrawerBackdrop: document.getElementById('dev-drawer-backdrop'),
+    btnCloseDevDrawer: document.getElementById('btn-close-dev-drawer'),
     scenNormal: document.getElementById('scen-normal'),
     scenWarning: document.getElementById('scen-warning'),
     scenEmergency: document.getElementById('scen-emergency'),
@@ -397,29 +429,13 @@
     btnCloseOsFooter: document.getElementById('btn-close-os-footer'),
     btnFooterOsInfo: document.getElementById('btn-footer-os-info'),
     btnFooterExportJson: document.getElementById('btn-footer-export-json'),
-    btnDownloadTelemetry: document.getElementById('btn-download-telemetry'),
-
-    // Section 10: ESP32 Device Status & Section 11: History
-    esp32HeaderDot: document.getElementById('esp32-header-dot'),
-    esp32HeaderStatusText: document.getElementById('esp32-header-status-text'),
-    esp32LiveBadge: document.getElementById('esp32-live-badge'),
-    esp32CardDeviceId: document.getElementById('esp32-card-device-id'),
-    esp32CardZone: document.getElementById('esp32-card-zone'),
-    esp32CardLocation: document.getElementById('esp32-card-location'),
-    esp32CardLastSeen: document.getElementById('esp32-card-last-seen'),
-    esp32CardLastSeenAgo: document.getElementById('esp32-card-last-seen-ago'),
-    esp32CardStatusText: document.getElementById('esp32-card-status-text'),
-    esp32CardRiskLevel: document.getElementById('esp32-card-risk-level'),
-    esp32CardTriggerSensor: document.getElementById('esp32-card-trigger-sensor'),
-    historyTbody: document.getElementById('history-tbody'),
-    historyCountLabel: document.getElementById('history-count-label')
+    btnDownloadTelemetry: document.getElementById('btn-download-telemetry')
   };
 
   // ==========================================================================
   // 5. RENDERING & UI UPDATES
   // ==========================================================================
 
-  // Generate SVG path for sparklines
   function renderSparkline(svgElement, dataArray, minVal, maxVal) {
     if (!svgElement || !dataArray || dataArray.length < 2) return;
     const width = 160;
@@ -428,12 +444,10 @@
     const step = width / (dataArray.length - 1);
 
     const points = dataArray.map((val, idx) => {
-      const x = Math.round(idx * step);
       const clamped = Math.max(minVal, Math.min(maxVal, val));
       const normalized = (clamped - minVal) / range;
-      // Invert Y so highest value is near top
       const y = Math.round(height - normalized * (height - 8) - 4);
-      return `${x},${y}`;
+      return `${Math.round(idx * step)},${y}`;
     });
 
     const pathString = 'M' + points.join(' L');
@@ -446,7 +460,7 @@
   function updateSparklines() {
     renderSparkline(DOM.sparklineMq4, State.history.mq4, 100, 4000);
     renderSparkline(DOM.sparklineMq7, State.history.mq7, 0, 500);
-    renderSparkline(DOM.sparklineMq135, State.history.mq135, 50, 1500);
+    renderSparkline(DOM.sparklineMq135, State.history.toxic, 50, 1500);
     renderSparkline(DOM.sparklineTemp, State.history.temp, 15, 55);
     renderSparkline(DOM.sparklineHum, State.history.hum, 20, 100);
   }
@@ -458,49 +472,78 @@
   function addAlertItem(type, title, desc) {
     const time = formatTime();
     State.alerts.unshift({ type, title, time, desc });
-    if (State.alerts.length > 25) State.alerts.pop();
+    if (State.alerts.length > 30) State.alerts.pop();
     renderAlerts();
   }
 
+  // Safe DOM building: Zero innerHTML for server-provided strings
   function renderAlerts() {
     if (!DOM.alertFeed) return;
-    DOM.alertFeed.innerHTML = '';
+    DOM.alertFeed.replaceChildren();
+
     State.alerts.forEach(item => {
       const el = document.createElement('div');
       el.className = `alert-item alert-${item.type}`;
-      const icon = item.type === 'green' ? '🟢' : item.type === 'yellow' ? '🟡' : '🔴';
-      el.innerHTML = `
-        <div class="alert-badge-dot">${icon}</div>
-        <div class="alert-body">
-          <div class="alert-row">
-            <strong class="alert-msg">${item.title}</strong>
-            <span class="alert-time">${item.time}</span>
-          </div>
-          <span class="alert-details">${item.desc}</span>
-        </div>
-      `;
+      const icon = item.type === 'green' ? '🟢' : (item.type === 'yellow' ? '🟡' : '🔴');
+
+      const badgeDot = document.createElement('div');
+      badgeDot.className = 'alert-badge-dot';
+      badgeDot.textContent = icon;
+
+      const alertBody = document.createElement('div');
+      alertBody.className = 'alert-body';
+
+      const alertRow = document.createElement('div');
+      alertRow.className = 'alert-row';
+
+      const strongMsg = document.createElement('strong');
+      strongMsg.className = 'alert-msg';
+      strongMsg.textContent = String(item.title || '');
+
+      const spanTime = document.createElement('span');
+      spanTime.className = 'alert-time';
+      spanTime.textContent = String(item.time || '');
+
+      alertRow.appendChild(strongMsg);
+      alertRow.appendChild(spanTime);
+
+      const spanDetails = document.createElement('span');
+      spanDetails.className = 'alert-details';
+      spanDetails.textContent = String(item.desc || '');
+
+      alertBody.appendChild(alertRow);
+      alertBody.appendChild(spanDetails);
+
+      el.appendChild(badgeDot);
+      el.appendChild(alertBody);
+
       DOM.alertFeed.appendChild(el);
     });
+
     if (DOM.alertCountPill) {
       DOM.alertCountPill.textContent = `${State.alerts.length} EVENTS`;
     }
+    if (DOM.tabBadgeAlerts) {
+      DOM.tabBadgeAlerts.textContent = State.alerts.length;
+    }
   }
 
-  // Update visual route nodes
   function renderVisualRoute(routeString) {
     if (!DOM.routePathVisual) return;
-    DOM.routePathVisual.innerHTML = '';
-    // e.g. "M2 ➔ M1 ➔ MAIN EXIT" or "M2 -> M1 -> MAIN EXIT"
-    const parts = routeString.split(/\s*->\s*|\s*➔\s*/);
+    DOM.routePathVisual.replaceChildren();
+
+    const parts = (routeString || 'NO SAFE ROUTE').split(/\s*->\s*|\s*➔\s*/);
     parts.forEach((node, idx) => {
       const nodeSpan = document.createElement('span');
       nodeSpan.className = 'route-node';
+      const cleanNode = node.trim();
+
       if (idx === 0) {
         nodeSpan.classList.add('current');
-      } else if (idx === parts.length - 1 || node.toUpperCase().includes('EXIT')) {
+      } else if (idx === parts.length - 1 || cleanNode.toUpperCase().includes('EXIT')) {
         nodeSpan.classList.add('exit-node');
       }
-      nodeSpan.textContent = node.trim();
+      nodeSpan.textContent = cleanNode;
       DOM.routePathVisual.appendChild(nodeSpan);
 
       if (idx < parts.length - 1) {
@@ -512,200 +555,327 @@
     });
   }
 
-  // Primary UI Synchronizer
+  // ==========================================================================
+  // FAIL-SAFE PRIMARY UI SYNCHRONIZER
+  // ==========================================================================
   function renderUI() {
-    const ai = calculateSafetyState(State);
-    const oldStatus = State.status;
-    State.status = ai.status;
-    State.dangerZone = ai.dangerZone;
-    State.safeRoute = ai.safeRoute;
+    const isOffline = (!State.esp32Online || State.esp32LastSeenSec === null || State.esp32LastSeenSec > 10);
 
-    // Trigger audible cadence if status changed or alarming
-    if (oldStatus !== State.status) {
-      triggerBuzzerCadence(State.status);
-      if (State.status === 'EMERGENCY') {
-        announceEmergencyVoice(`Alert. Dangerous conditions detected in Zone ${State.zone}. Follow green exit indicators.`);
-        addAlertItem('red', `EMERGENCY IN ${State.zone}`, `Critical threshold breached. Smart evacuation initiated.`);
-      } else if (State.status === 'WARNING') {
-        addAlertItem('yellow', `WARNING IN ${State.zone}`, `Abnormal gas/climate readings detected. Workers on standby.`);
-      } else {
-        addAlertItem('green', `NORMAL CONDITIONS RESTORED`, `All atmospheric parameters normalized.`);
-      }
+    // FAIL-SAFE RULE: If offline, fetch failed, or data > 10s old:
+    // Grey out UI, show 'NO DATA - SENSOR OFFLINE', status UNKNOWN, never SAFE!
+    if (isOffline && State.mode !== 'DEMO') {
+      State.esp32Online = false;
+      State.status = 'UNKNOWN'; // Never show SAFE
+      State.safeRoute = 'NO DATA - SENSOR OFFLINE';
+      State.dangerZone = null;
+      DOM.body.classList.add('sensor-offline-greyed');
+    } else {
+      DOM.body.classList.remove('sensor-offline-greyed');
     }
 
+    // Audible Escalation Check & Snooze Handling
+    const prevRank = SEVERITY_ORDER[State.lastAudibleStatus] || 0;
+    const currentRank = SEVERITY_ORDER[State.status] || 0;
+
+    if (currentRank > prevRank && currentRank >= 2) {
+      // Escalated to WARNING or EVACUATE! Re-arm snooze immediately
+      if (State.silenceUntil > 0) {
+        State.silenceUntil = 0;
+        if (DOM.btnSilenceAlarm) DOM.btnSilenceAlarm.textContent = 'Silence Siren';
+        addAlertItem('yellow', 'SNOOZE OVERRIDDEN: ESCALATION', 'Hazard level escalated. Audible alarm re-armed automatically.');
+      }
+      if (State.audioContextUnlocked) {
+        State.soundMuted = false;
+        if (DOM.soundIconOn) DOM.soundIconOn.classList.remove('hidden');
+        if (DOM.soundIconOff) DOM.soundIconOff.classList.add('hidden');
+        if (DOM.btnToggleSound) DOM.btnToggleSound.classList.remove('muted');
+      }
+      triggerBuzzerCadence(State.status);
+      if (State.status === 'EVACUATE') {
+        announceEmergencyVoice(`Critical hazard in Zone ${State.zone}. Immediate evacuation required.`);
+        addAlertItem('red', `EVACUATION IN ZONE ${State.zone}`, `Critical threshold breached. Evacuate via ${State.safeRoute}.`);
+      } else if (State.status === 'WARNING') {
+        addAlertItem('yellow', `WARNING IN ZONE ${State.zone}`, `Environmental parameters elevated.`);
+      }
+    } else if (State.status === 'SAFE' && State.lastAudibleStatus !== 'SAFE') {
+      addAlertItem('green', 'ATMOSPHERE NOMINAL', 'Sensors reporting safe atmospheric conditions.');
+    }
+
+    State.lastAudibleStatus = State.status;
+
     // 1. Body & Theme classes
-    DOM.body.className = `theme-dark status-${State.status.toLowerCase()}`;
+    DOM.body.className = `theme-dark status-${State.status.toLowerCase()}${isOffline && State.mode !== 'DEMO' ? ' sensor-offline-greyed' : ''}`;
     DOM.body.setAttribute('data-view-mode', State.viewMode);
 
     // 2. Header Telemetry
-    DOM.currentZoneVal.textContent = State.zone;
-    DOM.mineLocationVal.textContent = State.location;
-    DOM.lastUpdatedClock.textContent = formatTime();
+    if (DOM.currentZoneVal) DOM.currentZoneVal.textContent = State.zone;
+    if (DOM.mineLocationVal) DOM.mineLocationVal.textContent = State.location;
+    if (DOM.lastUpdatedClock) DOM.lastUpdatedClock.textContent = formatTime();
 
-    // 3. Top Emergency Banner
-    if (State.status === 'EMERGENCY' || State.status === 'WARNING') {
-      DOM.emergencyBanner.classList.remove('hidden');
-      if (State.status === 'EMERGENCY') {
-        DOM.bannerTitle.textContent = `CRITICAL HAZARD DETECTED IN ZONE ${State.zone}`;
-        DOM.bannerDesc.textContent = `Dangerous gas/temperature condition detected. Immediate evacuation required.`;
+    if (DOM.esp32HeaderDot && DOM.esp32HeaderStatusText) {
+      DOM.esp32HeaderDot.className = `indicator-dot ${State.esp32Online ? 'online' : 'offline'}`;
+      DOM.esp32HeaderStatusText.textContent = State.esp32Online ? 'ONLINE' : 'OFFLINE';
+    }
+
+    // 3. Persistent System Status Bar
+    if (DOM.statusBarMode) {
+      if (State.mode === 'DEMO') {
+        DOM.statusBarMode.className = 'mode-badge mode-demo';
+        DOM.statusBarMode.textContent = '● DEMO MODE';
+      } else if (State.esp32Online) {
+        DOM.statusBarMode.className = 'mode-badge mode-live';
+        DOM.statusBarMode.textContent = '● LIVE ESP32';
       } else {
-        DOM.bannerTitle.textContent = `ENVIRONMENTAL WARNING DETECTED`;
-        DOM.bannerDesc.textContent = `Abnormal conditions in Zone ${State.zone}. Miners stay alert for evacuation beacons.`;
+        DOM.statusBarMode.className = 'mode-badge mode-offline';
+        DOM.statusBarMode.textContent = '● SENSOR OFFLINE';
+      }
+    }
+
+    if (DOM.statusBarAge) {
+      if (State.esp32Online && State.esp32LastSeenSec !== null) {
+        DOM.statusBarAge.textContent = `${State.esp32LastSeenSec}s ago`;
+        DOM.statusBarAge.className = `age-indicator ${State.esp32LastSeenSec > 7 ? 'stale' : ''}`;
+      } else {
+        DOM.statusBarAge.textContent = 'No signal (>10s)';
+        DOM.statusBarAge.className = 'age-indicator stale';
+      }
+    }
+
+    if (DOM.statusBarNode) {
+      DOM.statusBarNode.textContent = `${State.node_id} (Zone ${State.zone})`;
+    }
+
+    if (DOM.statusBarNodesCount) {
+      const count = State.activeNodesCount || (State.esp32Online ? 1 : 0);
+      DOM.statusBarNodesCount.textContent = `${count} Node${count === 1 ? '' : 's'} Online`;
+    }
+
+    if (DOM.statusBarRisk) {
+      if (!State.esp32Online && State.mode !== 'DEMO') {
+        DOM.statusBarRisk.textContent = 'UNVERIFIED';
+        DOM.statusBarRisk.style.color = '#ff9100';
+      } else {
+        DOM.statusBarRisk.textContent = `${Math.round(State.serverRiskScore)}% (${State.esp32RiskLevel})`;
+        DOM.statusBarRisk.style.color = State.status === 'EVACUATE' ? 'var(--danger-red)' :
+                                       (State.status === 'WARNING' ? 'var(--warn-yellow)' : 'var(--safe-green)');
+      }
+    }
+
+    // 4. Mobile Worker HUD
+    if (DOM.workerHudBanner) {
+      if (State.status === 'UNKNOWN' || State.status === 'OFFLINE') {
+        if (DOM.hudArrow) DOM.hudArrow.textContent = '⚠️';
+        if (DOM.hudStatus) DOM.hudStatus.textContent = 'NO DATA - OFFLINE';
+        if (DOM.hudExitPath) DOM.hudExitPath.textContent = 'ATMOSPHERE UNVERIFIED';
+        if (DOM.hudZone) DOM.hudZone.textContent = `ZONE ${State.zone}`;
+      } else if (State.status === 'EVACUATE') {
+        if (DOM.hudArrow) DOM.hudArrow.textContent = '➔';
+        if (DOM.hudStatus) DOM.hudStatus.textContent = 'EVACUATE NOW';
+        if (DOM.hudExitPath) DOM.hudExitPath.textContent = State.safeRoute;
+        if (DOM.hudZone) DOM.hudZone.textContent = `ZONE ${State.zone}`;
+      } else if (State.status === 'WARNING') {
+        if (DOM.hudArrow) DOM.hudArrow.textContent = '➔';
+        if (DOM.hudStatus) DOM.hudStatus.textContent = 'STANDBY WARNING';
+        if (DOM.hudExitPath) DOM.hudExitPath.textContent = State.safeRoute;
+        if (DOM.hudZone) DOM.hudZone.textContent = `ZONE ${State.zone}`;
+      } else if (State.status === 'SENSOR_FAULT') {
+        if (DOM.hudArrow) DOM.hudArrow.textContent = '⚠️';
+        if (DOM.hudStatus) DOM.hudStatus.textContent = 'SENSOR FAULT';
+        if (DOM.hudExitPath) DOM.hudExitPath.textContent = State.safeRoute;
+        if (DOM.hudZone) DOM.hudZone.textContent = `ZONE ${State.zone}`;
+      } else {
+        if (DOM.hudArrow) DOM.hudArrow.textContent = '✔';
+        if (DOM.hudStatus) DOM.hudStatus.textContent = 'CORRIDOR SAFE';
+        if (DOM.hudExitPath) DOM.hudExitPath.textContent = State.safeRoute;
+        if (DOM.hudZone) DOM.hudZone.textContent = `ZONE ${State.zone}`;
+      }
+    }
+
+    // 5. Emergency Broadcast Banner
+    if (State.status === 'EVACUATE' || State.status === 'WARNING') {
+      DOM.emergencyBanner.classList.remove('hidden');
+      if (State.status === 'EVACUATE') {
+        DOM.bannerTitle.textContent = `CRITICAL EVACUATION IN ZONE ${State.zone}`;
+        DOM.bannerDesc.textContent = `Dangerous gas or thermal conditions detected. Immediate evacuation ordered.`;
+      } else {
+        DOM.bannerTitle.textContent = `ENVIRONMENTAL WARNING ADVISORY`;
+        DOM.bannerDesc.textContent = `Abnormal conditions in Zone ${State.zone}. Prepare respirators and monitor exit vectors.`;
       }
       DOM.bannerRouteHint.textContent = `ROUTE: ${State.safeRoute}`;
     } else {
       DOM.emergencyBanner.classList.add('hidden');
     }
 
-    // 4. Section 1: Live Safety Status
-    if (State.status === 'SAFE') {
+    // 6. Section 1: Live Safety Status Shield
+    if (State.status === 'UNKNOWN' || State.status === 'OFFLINE') {
+      DOM.statusIcon.textContent = '⚠️';
+      DOM.statusBadgeText.textContent = 'OFFLINE';
+      DOM.statusHeadline.textContent = 'NO DATA - SENSOR OFFLINE';
+      DOM.statusSubmessage.textContent = 'Telemetry stream interrupted for >10 seconds. Atmospheric safety is unconfirmed. Proceed with extreme caution!';
+      DOM.aiThreatScore.textContent = 'UNVERIFIED';
+      DOM.evacReadinessLabel.textContent = 'HAZARD UNCONFIRMED';
+      DOM.activeResponseLabel.textContent = 'TELEMETRY DISCONNECTED';
+    } else if (State.status === 'SAFE') {
       DOM.statusIcon.textContent = '🛡️';
       DOM.statusBadgeText.textContent = 'SAFE';
       DOM.statusHeadline.textContent = 'SAFE';
-      DOM.statusSubmessage.textContent = 'System operating normally. Atmospheric gas concentrations, airflow, and tunnel temperatures are within standard safety limits.';
-      DOM.aiThreatScore.textContent = `${ai.overallScore}% (Nominal)`;
+      DOM.statusSubmessage.textContent = 'Atmospheric gas concentrations, airflow, and tunnel temperatures are within normal limits.';
+      DOM.aiThreatScore.textContent = `${Math.round(State.serverRiskScore)}% (Nominal)`;
       DOM.evacReadinessLabel.textContent = 'STANDBY / CLEAR';
       DOM.activeResponseLabel.textContent = 'AUTOMATED SURVEILLANCE';
     } else if (State.status === 'WARNING') {
       DOM.statusIcon.textContent = '⚠️';
       DOM.statusBadgeText.textContent = 'WARNING';
       DOM.statusHeadline.textContent = 'WARNING';
-      DOM.statusSubmessage.textContent = 'Abnormal environmental conditions detected. Workers should remain alert and prepare for potential evacuation.';
-      DOM.aiThreatScore.textContent = `${ai.overallScore}% (Elevated)`;
+      DOM.statusSubmessage.textContent = 'Abnormal environmental conditions detected. Workers must remain alert and prepare for evacuation.';
+      DOM.aiThreatScore.textContent = `${Math.round(State.serverRiskScore)}% (Elevated)`;
       DOM.evacReadinessLabel.textContent = 'STAGE 1 EVAC READINESS';
       DOM.activeResponseLabel.textContent = 'HIGH VENTILATION SPOOL';
+    } else if (State.status === 'SENSOR_FAULT') {
+      DOM.statusIcon.textContent = '⚠️';
+      DOM.statusBadgeText.textContent = 'FAULT';
+      DOM.statusHeadline.textContent = 'HARDWARE SENSOR FAULT';
+      DOM.statusSubmessage.textContent = 'Telemetry packet indicates sensor disconnected or hardware read error. Inspect node.';
+      DOM.aiThreatScore.textContent = 'HARDWARE ERROR';
+      DOM.evacReadinessLabel.textContent = 'MAINTENANCE REQUIRED';
+      DOM.activeResponseLabel.textContent = 'FAIL-SAFE ENGAGED';
     } else {
       DOM.statusIcon.textContent = '🚨';
-      DOM.statusBadgeText.textContent = 'EMERGENCY';
-      DOM.statusHeadline.textContent = 'EMERGENCY';
-      DOM.statusSubmessage.textContent = 'Dangerous gas/temperature condition detected! Immediate evacuation required! Follow lighted green indicators toward the main exit.';
-      DOM.aiThreatScore.textContent = `${ai.overallScore}% (CRITICAL)`;
+      DOM.statusBadgeText.textContent = 'EVACUATE';
+      DOM.statusHeadline.textContent = 'EVACUATE';
+      DOM.statusSubmessage.textContent = 'Dangerous gas/temperature condition detected! Immediate evacuation required! Follow illuminated beacons.';
+      DOM.aiThreatScore.textContent = `${Math.round(State.serverRiskScore)}% (CRITICAL)`;
       DOM.evacReadinessLabel.textContent = 'IMMEDIATE EVACUATION ACTIVE';
       DOM.activeResponseLabel.textContent = 'ALL AUTOMATED RESPONSES FIRED';
     }
 
-    // 5. Section 5: Smart Evacuation Route
+    // 7. Section 5: Smart Evacuation Route
     DOM.routeCurrentZone.textContent = State.zone;
-    DOM.routeDangerZone.textContent = State.dangerZone ? `ZONE ${State.dangerZone} (HAZARDOUS)` : 'NONE (ALL CLEAR)';
+    DOM.routeDangerZone.textContent = State.dangerZone ? `ZONE ${State.dangerZone} (HAZARDOUS)` :
+                                      (State.status === 'UNKNOWN' || State.status === 'OFFLINE' ? 'UNVERIFIED (OFFLINE)' : 'NONE (ALL CLEAR)');
     renderVisualRoute(State.safeRoute);
 
-    if (State.status === 'EMERGENCY') {
+    if (State.status === 'UNKNOWN' || State.status === 'OFFLINE') {
+      DOM.guideHeadline.textContent = `TELEMETRY SIGNAL LOST`;
+      DOM.guideSubtext.textContent = `Sensor nodes are offline (>10s). Do not enter unmonitored shafts without portable detection equipment.`;
+    } else if (State.status === 'EVACUATE') {
       DOM.guideHeadline.textContent = `EMERGENCY EXTRACTION IN PROGRESS: EVACUATE ZONE ${State.zone}`;
-      DOM.guideSubtext.textContent = `Follow the illuminated green beacon track. Avoid hazardous pockets. Route calculated: ${State.safeRoute}.`;
+      DOM.guideSubtext.textContent = `Follow the illuminated beacon track. Bypass contaminated zones. Route: ${State.safeRoute}.`;
     } else if (State.status === 'WARNING') {
       DOM.guideHeadline.textContent = `PRE-EVACUATION ADVISORY`;
-      DOM.guideSubtext.textContent = `Environmental parameters in Zone ${State.zone} deviate from nominal. Keep personal gas respirators at hand.`;
+      DOM.guideSubtext.textContent = `Environmental parameters in Zone ${State.zone} deviate from nominal. Keep gas respirators at hand.`;
     } else {
       DOM.guideHeadline.textContent = `NORMAL CORRIDORS CLEAR`;
-      DOM.guideSubtext.textContent = `All extraction pathways and tunnel shafts are clear. In case of localized alarm, proceed through the designated lighted corridors toward the surface exit portal.`;
+      DOM.guideSubtext.textContent = `All extraction pathways and tunnel shafts are clear. Proceed along standard lighted corridors.`;
     }
 
-    // 6. Section 2: Sensor Monitoring Cards
-    // MQ4
+    // 8. Section 2: Sensor Monitoring Cards
     DOM.valMq4.textContent = Math.round(State.methane);
-    updateSensorPill(DOM.pillMq4, DOM.cardMq4, State.methane, THRESHOLDS.mq4.warn, THRESHOLDS.mq4.danger);
+    updateSensorPill(DOM.pillMq4, DOM.cardMq4, State.methane, THRESHOLDS.methane.warn, THRESHOLDS.methane.danger);
 
-    // MQ7
     DOM.valMq7.textContent = Math.round(State.co);
-    updateSensorPill(DOM.pillMq7, DOM.cardMq7, State.co, THRESHOLDS.mq7.warn, THRESHOLDS.mq7.danger);
+    updateSensorPill(DOM.pillMq7, DOM.cardMq7, State.co, THRESHOLDS.co.warn, THRESHOLDS.co.danger);
 
-    // MQ135
-    DOM.valMq135.textContent = Math.round(State.mq135);
-    updateSensorPill(DOM.pillMq135, DOM.cardMq135, State.mq135, THRESHOLDS.mq135.warn, THRESHOLDS.mq135.danger);
+    DOM.valMq135.textContent = Math.round(State.toxic);
+    updateSensorPill(DOM.pillMq135, DOM.cardMq135, State.toxic, THRESHOLDS.toxic.warn, THRESHOLDS.toxic.danger);
 
-    // DHT11 Temp
-    DOM.valTemp.textContent = State.temperature.toFixed(1);
-    updateSensorPill(DOM.pillTemp, DOM.cardTemp, State.temperature, THRESHOLDS.temp.warn, THRESHOLDS.temp.danger);
+    if (State.temp !== null && !isNaN(State.temp)) {
+      DOM.valTemp.textContent = Number(State.temp).toFixed(1);
+      updateSensorPill(DOM.pillTemp, DOM.cardTemp, State.temp, THRESHOLDS.temp.warn, THRESHOLDS.temp.danger);
+    } else {
+      DOM.valTemp.textContent = '--';
+      DOM.pillTemp.textContent = 'FAULT';
+      DOM.pillTemp.className = 'sensor-status-pill status-warn';
+      DOM.cardTemp.className = 'sensor-card card-warn';
+    }
 
-    // DHT11 Humidity
-    DOM.valHum.textContent = Math.round(State.humidity);
-    const humBad = State.humidity < THRESHOLDS.hum.lowWarn || State.humidity > THRESHOLDS.hum.highWarn;
-    DOM.pillHum.textContent = humBad ? 'ELEVATED' : 'NORMAL';
-    DOM.pillHum.className = `sensor-status-pill ${humBad ? 'status-warn' : 'status-normal'}`;
+    if (State.humidity !== null && !isNaN(State.humidity)) {
+      DOM.valHum.textContent = Math.round(State.humidity);
+      const humBad = State.humidity < THRESHOLDS.hum.lowWarn || State.humidity > THRESHOLDS.hum.highWarn;
+      DOM.pillHum.textContent = humBad ? 'ELEVATED' : 'NORMAL';
+      DOM.pillHum.className = `sensor-status-pill ${humBad ? 'status-warn' : 'status-normal'}`;
+    } else {
+      DOM.valHum.textContent = '--';
+      DOM.pillHum.textContent = 'FAULT';
+      DOM.pillHum.className = 'sensor-status-pill status-warn';
+    }
 
-    // Update Sparklines
-    updateSparklines();
-
-    // 7. Section 3: Risk Analysis
-    DOM.overallRiskPercent.textContent = `${ai.overallScore}%`;
-    // Radial gauge circumference is 2 * PI * 48 ≈ 301.6
+    // 9. Section 3: Authoritative Risk Analysis
+    const riskScore = Math.round(State.serverRiskScore);
+    DOM.overallRiskPercent.textContent = `${riskScore}%`;
     const circumference = 301.6;
-    const offset = circumference - (ai.overallScore / 100) * circumference;
+    const offset = circumference - (riskScore / 100) * circumference;
     DOM.overallRadialFill.style.strokeDashoffset = offset;
 
-    if (State.status === 'EMERGENCY') {
+    if (State.status === 'EVACUATE') {
       DOM.riskCompositeTag.textContent = 'RISK LEVEL: SEVERE (IV)';
       DOM.riskCompositeTag.style.color = 'var(--danger-red)';
-      DOM.riskCompositeTag.style.borderColor = 'var(--danger-red)';
       DOM.overallRiskDesc.textContent = 'CRITICAL ATMOSPHERE';
       DOM.overallRadialFill.style.stroke = 'var(--danger-red)';
     } else if (State.status === 'WARNING') {
       DOM.riskCompositeTag.textContent = 'RISK LEVEL: ELEVATED (II)';
       DOM.riskCompositeTag.style.color = 'var(--warn-yellow)';
-      DOM.riskCompositeTag.style.borderColor = 'var(--warn-yellow)';
       DOM.overallRiskDesc.textContent = 'ABNORMAL CONDITIONS';
       DOM.overallRadialFill.style.stroke = 'var(--warn-yellow)';
+    } else if (State.status === 'UNKNOWN' || State.status === 'OFFLINE') {
+      DOM.riskCompositeTag.textContent = 'RISK LEVEL: UNVERIFIED';
+      DOM.riskCompositeTag.style.color = '#ff9100';
+      DOM.overallRiskDesc.textContent = 'OFFLINE SIGNAL';
+      DOM.overallRadialFill.style.stroke = '#ff9100';
     } else {
       DOM.riskCompositeTag.textContent = 'RISK LEVEL: NOMINAL (I)';
       DOM.riskCompositeTag.style.color = 'var(--safe-green)';
-      DOM.riskCompositeTag.style.borderColor = 'var(--safe-green)';
       DOM.overallRiskDesc.textContent = 'MINIMAL HAZARD';
       DOM.overallRadialFill.style.stroke = 'var(--safe-green)';
     }
 
-    // Progress Bars
-    updateProgressBar(DOM.barRiskCh4, DOM.riskScoreCh4, ai.riskCh4);
-    updateProgressBar(DOM.barRiskCo, DOM.riskScoreCo, ai.riskCo);
-    updateProgressBar(DOM.barRiskAqi, DOM.riskScoreAqi, ai.riskAqi);
-    updateProgressBar(DOM.barRiskTemp, DOM.riskScoreTemp, ai.riskTemp);
+    // Component Risk Ratios
+    const comp = State.riskComponents || {};
+    const riskCh4 = comp.methane !== undefined ? comp.methane : Math.min(100, Math.round((State.methane / THRESHOLDS.methane.danger) * 100));
+    const riskCo = comp.co !== undefined ? comp.co : Math.min(100, Math.round((State.co / THRESHOLDS.co.danger) * 100));
+    const riskToxic = comp.toxic !== undefined ? comp.toxic : Math.min(100, Math.round((State.toxic / THRESHOLDS.toxic.danger) * 100));
+    const riskTemp = comp.temp !== undefined ? comp.temp : (State.temp ? Math.min(100, Math.round(Math.max(0, (State.temp - 20) / (THRESHOLDS.temp.danger - 20) * 100))) : 0);
 
-    // 8. Section 4: 2D Mine Tunnel Map
-    updateTunnelMap(ai);
+    updateProgressBar(DOM.barRiskCh4, DOM.riskScoreCh4, riskCh4);
+    updateProgressBar(DOM.barRiskCo, DOM.riskScoreCo, riskCo);
+    updateProgressBar(DOM.barRiskAqi, DOM.riskScoreAqi, riskToxic);
+    updateProgressBar(DOM.barRiskTemp, DOM.riskScoreTemp, riskTemp);
 
-    // 9. Section 6: Worker Safety Monitor Table
+    // 10. Map, Workers, Emergency Response, Actuators & Device Status
+    updateTunnelMap(State.status, State.dangerZone, State.contaminatedZones);
     updateWorkersTable(State.status, State.zone);
-
-    // 10. Section 8: Emergency Response Protocol
     updateEmergencyResponse(State.status, State.dangerZone);
-
-    // 11. Section 9: Buzzer and LED Hardware Status
-    updateHardwareActuators(State.status);
-
-    // 12. Section 10: ESP32 Hardware Status
+    updateHardwareActuators(State.status, State.fan_on);
     updateEsp32Card();
   }
 
   function updateEsp32Card() {
-    if (DOM.esp32HeaderDot) {
-      DOM.esp32HeaderDot.className = `indicator-dot ${State.esp32Online ? 'online' : 'offline'}`;
-      DOM.esp32HeaderStatusText.textContent = State.esp32Online ? 'ONLINE' : 'OFFLINE';
-    }
     if (DOM.esp32LiveBadge) {
       DOM.esp32LiveBadge.className = `status-pill ${State.esp32Online ? 'status-safe' : 'status-danger'}`;
       DOM.esp32LiveBadge.textContent = State.esp32Online ? '🟢 ONLINE' : '🔴 OFFLINE';
     }
-    if (DOM.esp32CardDeviceId) DOM.esp32CardDeviceId.textContent = State.esp32DeviceId || 'ESP32_M1';
+    if (DOM.esp32CardDeviceId) DOM.esp32CardDeviceId.textContent = State.node_id || 'ESP32_M1';
     if (DOM.esp32CardZone) DOM.esp32CardZone.textContent = State.zone || 'M1';
     if (DOM.esp32CardLocation) DOM.esp32CardLocation.textContent = State.location || `Mine Zone ${State.zone}`;
-    if (DOM.esp32CardLastSeen) DOM.esp32CardLastSeen.textContent = State.esp32LastSeen || 'No data yet';
+    if (DOM.esp32CardLastSeen) DOM.esp32CardLastSeen.textContent = State.esp32LastSeenTimestamp || 'No data yet';
     if (DOM.esp32CardLastSeenAgo) {
       DOM.esp32CardLastSeenAgo.textContent = State.esp32Online
         ? (State.esp32LastSeenSec !== null ? `${State.esp32LastSeenSec}s ago` : 'Active stream')
-        : 'Waiting for ESP32 stream...';
+        : 'Waiting for ESP32 telemetry packet (>10s)...';
     }
     if (DOM.esp32CardStatusText) {
-      DOM.esp32CardStatusText.textContent = State.esp32Online ? 'ONLINE (STREAMING)' : 'OFFLINE (STANDBY)';
-      DOM.esp32CardStatusText.style.color = State.esp32Online ? 'var(--safe-green)' : 'var(--danger-red)';
+      DOM.esp32CardStatusText.textContent = State.esp32Online ? 'ONLINE (STREAMING)' : 'OFFLINE (NO DATA)';
+      DOM.esp32CardStatusText.style.color = State.esp32Online ? 'var(--safe-green)' : '#ff9100';
     }
     if (DOM.esp32CardRiskLevel) {
-      const risk = (State.esp32RiskLevel || 'LOW').toUpperCase();
+      const risk = (State.esp32RiskLevel || 'UNKNOWN').toUpperCase();
       DOM.esp32CardRiskLevel.textContent = risk;
       DOM.esp32CardRiskLevel.className = `esp-box-val badge-risk-${risk.toLowerCase()}`;
     }
     if (DOM.esp32CardTriggerSensor) {
       const trigger = State.esp32TriggerSensor || 'None (All Nominal)';
       DOM.esp32CardTriggerSensor.textContent = trigger;
-      DOM.esp32CardTriggerSensor.style.color = (trigger !== 'None (All Nominal)')
+      DOM.esp32CardTriggerSensor.style.color = (trigger !== 'None (All Nominal)' && trigger !== 'No Sensor Connected')
         ? 'var(--danger-red)'
         : 'var(--safe-green)';
     }
@@ -735,21 +905,22 @@
     else if (pct >= 50) barEl.classList.add('level-warn');
   }
 
-  function updateTunnelMap(ai) {
-    const danger = State.dangerZone;
-
-    // Reset zone classes
+  function updateTunnelMap(status, danger, contaminated) {
     ['M1', 'M2', 'M3'].forEach(z => {
       const g = document.getElementById(`zone-${z.toLowerCase()}`);
       if (g) g.classList.remove('zone-safe', 'zone-warning', 'zone-danger');
     });
 
-    // M1
-    if (danger === 'M1') {
-      DOM.zoneBoxM1.classList.add(ai.status === 'EMERGENCY' ? 'zone-danger' : 'zone-warning');
-      DOM.mapStatusM1.textContent = `STATUS: ${ai.status}`;
-      DOM.mapStatusM1.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
-      DOM.bulbM1.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
+    const isEvac = (status === 'EVACUATE' || status === 'EMERGENCY');
+    const isWarn = (status === 'WARNING');
+    const hazardList = contaminated && contaminated.length > 0 ? contaminated : (danger ? [danger] : []);
+
+    // Zone M1
+    if (hazardList.includes('M1')) {
+      DOM.zoneBoxM1.classList.add(isEvac ? 'zone-danger' : 'zone-warning');
+      DOM.mapStatusM1.textContent = `STATUS: ${isEvac ? 'EVACUATE' : 'WARNING'}`;
+      DOM.mapStatusM1.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
+      DOM.bulbM1.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
     } else {
       DOM.zoneBoxM1.classList.add('zone-safe');
       DOM.mapStatusM1.textContent = 'STATUS: SAFE';
@@ -757,12 +928,12 @@
       DOM.bulbM1.setAttribute('fill', '#00e676');
     }
 
-    // M2
-    if (danger === 'M2') {
-      DOM.zoneBoxM2.classList.add(ai.status === 'EMERGENCY' ? 'zone-danger' : 'zone-warning');
-      DOM.mapStatusM2.textContent = `STATUS: ${ai.status}`;
-      DOM.mapStatusM2.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
-      DOM.bulbM2.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
+    // Zone M2
+    if (hazardList.includes('M2')) {
+      DOM.zoneBoxM2.classList.add(isEvac ? 'zone-danger' : 'zone-warning');
+      DOM.mapStatusM2.textContent = `STATUS: ${isEvac ? 'EVACUATE' : 'WARNING'}`;
+      DOM.mapStatusM2.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
+      DOM.bulbM2.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
       DOM.hazardPulseM2.classList.remove('hidden');
     } else {
       DOM.zoneBoxM2.classList.add('zone-safe');
@@ -772,12 +943,12 @@
       DOM.hazardPulseM2.classList.add('hidden');
     }
 
-    // M3
-    if (danger === 'M3') {
-      DOM.zoneBoxM3.classList.add(ai.status === 'EMERGENCY' ? 'zone-danger' : 'zone-warning');
-      DOM.mapStatusM3.textContent = `STATUS: ${ai.status}`;
-      DOM.mapStatusM3.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
-      DOM.bulbM3.setAttribute('fill', ai.status === 'EMERGENCY' ? '#ff1744' : '#ffb300');
+    // Zone M3
+    if (hazardList.includes('M3')) {
+      DOM.zoneBoxM3.classList.add(isEvac ? 'zone-danger' : 'zone-warning');
+      DOM.mapStatusM3.textContent = `STATUS: ${isEvac ? 'EVACUATE' : 'WARNING'}`;
+      DOM.mapStatusM3.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
+      DOM.bulbM3.setAttribute('fill', isEvac ? '#ff1744' : '#ffb300');
       DOM.hazardPulseM3.classList.remove('hidden');
     } else {
       DOM.zoneBoxM3.classList.add('zone-safe');
@@ -787,13 +958,15 @@
       DOM.hazardPulseM3.classList.add('hidden');
     }
 
-    // Tunnel corridors & Guidance
-    if (ai.status === 'EMERGENCY') {
-      DOM.mapNetworkStatus.textContent = `HAZARD ACTIVE IN ZONE ${danger} - EVACUATION ROUTE ILLUMINATED`;
+    if (isEvac) {
+      DOM.mapNetworkStatus.textContent = `HAZARD ACTIVE IN ${hazardList.join(', ')} - EVACUATION ROUTE ILLUMINATED`;
       DOM.mapNetworkStatus.style.color = '#ff1744';
-    } else if (ai.status === 'WARNING') {
-      DOM.mapNetworkStatus.textContent = `ATTENTION: ANOMALY MONITORED IN ZONE ${danger}`;
+    } else if (isWarn) {
+      DOM.mapNetworkStatus.textContent = `ANOMALY MONITORED IN ${hazardList.join(', ')}`;
       DOM.mapNetworkStatus.style.color = '#ffb300';
+    } else if (status === 'UNKNOWN' || status === 'OFFLINE') {
+      DOM.mapNetworkStatus.textContent = 'TELEMETRY OFFLINE - CORRIDORS UNVERIFIED';
+      DOM.mapNetworkStatus.style.color = '#ff9100';
     } else {
       DOM.mapNetworkStatus.textContent = 'ALL PATHWAYS FUNCTIONAL';
       DOM.mapNetworkStatus.style.color = '#00e676';
@@ -801,25 +974,35 @@
   }
 
   function updateWorkersTable(status, activeZone) {
-    if (status === 'EMERGENCY') {
-      // Worker 02 in M2 is evacuating
-      DOM.w2SafetyBadge.textContent = 'WARNING';
-      DOM.w2SafetyBadge.className = 'status-pill status-warning';
-      DOM.w2EvacBadge.textContent = 'EVACUATING ➔ M1';
+    const hazardList = State.contaminatedZones && State.contaminatedZones.length > 0
+      ? State.contaminatedZones
+      : (State.dangerZone ? [State.dangerZone] : []);
+
+    const isEvac = (status === 'EVACUATE' || status === 'EMERGENCY');
+    const isWarn = (status === 'WARNING');
+
+    // Worker 1 (in M1)
+    const w1Route = (State.routes && State.routes['M1']) ? State.routes['M1'] : bfsFindRoute('M1', hazardList);
+    if (hazardList.includes('M1')) {
+      DOM.w1SafetyBadge.textContent = isEvac ? 'EVACUATE' : 'WARNING';
+      DOM.w1SafetyBadge.className = `status-pill ${isEvac ? 'status-danger' : 'status-warning'}`;
+      DOM.w1EvacBadge.textContent = `ROUTE: ${w1Route}`;
+      DOM.w1EvacBadge.className = 'evac-pill evac-moving';
+    } else {
+      DOM.w1SafetyBadge.textContent = 'SAFE';
+      DOM.w1SafetyBadge.className = 'status-pill status-safe';
+      DOM.w1EvacBadge.textContent = 'STATIONARY / WORKING';
+      DOM.w1EvacBadge.className = 'evac-pill evac-normal';
+    }
+
+    // Worker 2 (in M2)
+    const w2Route = (State.routes && State.routes['M2']) ? State.routes['M2'] : bfsFindRoute('M2', hazardList);
+    if (hazardList.includes('M2')) {
+      DOM.w2SafetyBadge.textContent = isEvac ? 'EVACUATE' : 'WARNING';
+      DOM.w2SafetyBadge.className = `status-pill ${isEvac ? 'status-danger' : 'status-warning'}`;
+      DOM.w2EvacBadge.textContent = `ROUTE: ${w2Route}`;
       DOM.w2EvacBadge.className = 'evac-pill evac-moving';
-
-      if (DOM.pinBgW2) {
-        DOM.pinBgW2.setAttribute('stroke', '#ff1744');
-      }
-
-      DOM.w3EvacBadge.textContent = 'STANDBY / ALERT';
-      DOM.w3EvacBadge.className = 'evac-pill evac-alert';
-    } else if (status === 'WARNING') {
-      DOM.w2SafetyBadge.textContent = 'WARNING';
-      DOM.w2SafetyBadge.className = 'status-pill status-warning';
-      DOM.w2EvacBadge.textContent = 'ALERT STANDBY';
-      DOM.w2EvacBadge.className = 'evac-pill evac-normal';
-      if (DOM.pinBgW2) DOM.pinBgW2.setAttribute('stroke', '#ffb300');
+      if (DOM.pinBgW2) DOM.pinBgW2.setAttribute('stroke', isEvac ? '#ff1744' : '#ffb300');
     } else {
       DOM.w2SafetyBadge.textContent = 'SAFE';
       DOM.w2SafetyBadge.className = 'status-pill status-safe';
@@ -827,20 +1010,34 @@
       DOM.w2EvacBadge.className = 'evac-pill evac-normal';
       if (DOM.pinBgW2) DOM.pinBgW2.setAttribute('stroke', '#00e676');
     }
+
+    // Worker 3 (in M3)
+    const w3Route = (State.routes && State.routes['M3']) ? State.routes['M3'] : bfsFindRoute('M3', hazardList);
+    if (hazardList.includes('M3')) {
+      DOM.w3SafetyBadge.textContent = isEvac ? 'EVACUATE' : 'WARNING';
+      DOM.w3SafetyBadge.className = `status-pill ${isEvac ? 'status-danger' : 'status-warning'}`;
+      DOM.w3EvacBadge.textContent = `ROUTE: ${w3Route}`;
+      DOM.w3EvacBadge.className = 'evac-pill evac-moving';
+    } else {
+      DOM.w3SafetyBadge.textContent = 'SAFE';
+      DOM.w3SafetyBadge.className = 'status-pill status-safe';
+      DOM.w3EvacBadge.textContent = 'STATIONARY / WORKING';
+      DOM.w3EvacBadge.className = 'evac-pill evac-normal';
+    }
   }
 
   function updateEmergencyResponse(status, dangerZone) {
-    if (status === 'EMERGENCY') {
+    if (status === 'EVACUATE' || status === 'EMERGENCY') {
       DOM.respStatePill.textContent = '🚨 CODE RED: DISPATCHED';
       DOM.respStatePill.className = 'resp-state-pill active-alarm';
 
       DOM.rcStatusCr.textContent = 'ALERT SENT (LIVE)';
       DOM.rcControlRoom.className = 'resp-card dispatched';
 
-      DOM.rcStatusRescue.textContent = 'SMS ALERT SENT';
+      DOM.rcStatusRescue.textContent = 'SMS ALERT SENT [SIMULATED]';
       DOM.rcRescue.className = 'resp-card dispatched';
 
-      DOM.rcStatusAmbulance.textContent = 'SMS ALERT SENT';
+      DOM.rcStatusAmbulance.textContent = 'SMS ALERT SENT [SIMULATED]';
       DOM.rcAmbulance.className = 'resp-card dispatched';
 
       DOM.rcStatusFan.textContent = 'ON (MAX 100% RPM)';
@@ -867,7 +1064,7 @@
       DOM.rcStatusFan.textContent = 'ON (SPOOLING 100%)';
       DOM.rcVentilation.className = 'resp-card dispatched-safe';
 
-      DOM.rcStatusBuzzer.textContent = 'ACTIVE (2 ALERTS)';
+      DOM.rcStatusBuzzer.textContent = 'ACTIVE (2 PULSES)';
       DOM.rcBuzzer.className = 'resp-card';
 
       DOM.rcStatusTargetZone.textContent = dangerZone ? `ZONE ${dangerZone}` : 'M2';
@@ -888,7 +1085,7 @@
       DOM.rcStatusFan.textContent = 'NORMAL (40% RPM)';
       DOM.rcVentilation.className = 'resp-card';
 
-      DOM.rcStatusBuzzer.textContent = 'NORMAL CADENCE (1)';
+      DOM.rcStatusBuzzer.textContent = 'NORMAL CADENCE (OFF)';
       DOM.rcBuzzer.className = 'resp-card';
 
       DOM.rcStatusTargetZone.textContent = 'NONE (ALL CLEAR)';
@@ -896,8 +1093,7 @@
     }
   }
 
-  function updateHardwareActuators(status) {
-    // 1. Tri-Color LEDs
+  function updateHardwareActuators(status, fanOn) {
     DOM.ledGreenBulb.classList.remove('active');
     DOM.ledYellowBulb.classList.remove('active');
     DOM.ledRedBulb.classList.remove('active');
@@ -906,180 +1102,181 @@
       DOM.ledGreenBulb.classList.add('active');
       DOM.ledGreenText.textContent = 'SAFE (ACTIVE)';
       DOM.ledYellowText.textContent = 'WARNING (OFF)';
-      DOM.ledRedText.textContent = 'DANGER (OFF)';
+      DOM.ledRedText.textContent = 'EVACUATE (OFF)';
     } else if (status === 'WARNING') {
       DOM.ledYellowBulb.classList.add('active');
       DOM.ledGreenText.textContent = 'SAFE (OFF)';
       DOM.ledYellowText.textContent = 'WARNING (ACTIVE)';
-      DOM.ledRedText.textContent = 'DANGER (OFF)';
-    } else {
+      DOM.ledRedText.textContent = 'EVACUATE (OFF)';
+    } else if (status === 'EVACUATE' || status === 'EMERGENCY') {
       DOM.ledRedBulb.classList.add('active');
       DOM.ledGreenText.textContent = 'SAFE (OFF)';
       DOM.ledYellowText.textContent = 'WARNING (OFF)';
-      DOM.ledRedText.textContent = 'DANGER (ACTIVE)';
+      DOM.ledRedText.textContent = 'EVACUATE (ACTIVE)';
+    } else {
+      // SENSOR_FAULT / OFFLINE / UNKNOWN
+      DOM.ledGreenText.textContent = 'SAFE (OFF)';
+      DOM.ledYellowText.textContent = 'WARNING (OFF)';
+      DOM.ledRedText.textContent = 'EVACUATE (OFF)';
     }
 
-    // 2. Piezo Buzzer
     DOM.badgeCad1.className = 'badge-cadence';
     DOM.badgeCad2.className = 'badge-cadence';
     DOM.badgeCad3.className = 'badge-cadence';
     DOM.buzzerWaveRing.classList.remove('buzzing');
 
     if (status === 'SAFE') {
-      DOM.buzzerCadenceLabel.textContent = '1 ALERT PULSE (SAFE)';
-      DOM.buzzerCadenceDesc.textContent = 'Microcontroller emits periodic single beep to confirm heartbeat and operational integrity.';
+      DOM.buzzerCadenceLabel.textContent = 'AUDIO SILENT (SAFE)';
+      DOM.buzzerCadenceDesc.textContent = 'System normal. Periodic chirp stopped per ergonomic safety guidelines.';
       DOM.badgeCad1.className = 'badge-cadence active';
     } else if (status === 'WARNING') {
       DOM.buzzerCadenceLabel.textContent = '2 ALERT PULSES (WARNING)';
       DOM.buzzerCadenceDesc.textContent = 'Double beep cadence active. Environmental anomaly requires personnel alertness.';
       DOM.badgeCad2.className = 'badge-cadence active-warn';
       DOM.buzzerWaveRing.classList.add('buzzing');
-    } else {
-      DOM.buzzerCadenceLabel.textContent = '3 ALERTS / CONTINUOUS (DANGER)';
+    } else if (status === 'EVACUATE' || status === 'EMERGENCY') {
+      DOM.buzzerCadenceLabel.textContent = '3 PULSES / CONTINUOUS (EVACUATE)';
       DOM.buzzerCadenceDesc.textContent = 'Continuous high-decibel alarm sounding across mine tunnel sector.';
       DOM.badgeCad3.className = 'badge-cadence active-danger';
       DOM.buzzerWaveRing.classList.add('buzzing');
+    } else {
+      DOM.buzzerCadenceLabel.textContent = 'AUDIO SILENT (SENSOR OFFLINE)';
+      DOM.buzzerCadenceDesc.textContent = 'Telemetry feed silent. Microcontroller operates local fallback buzzer.';
     }
 
-    // 3. Ventilation Fan
-    if (status === 'SAFE') {
-      DOM.fanStateTitle.textContent = 'VENTILATION: NORMAL';
-      DOM.fanDutyCycle.textContent = 'Status: Baseline 40% RPM';
-      DOM.fanDutyCycle.style.color = 'var(--safe-green)';
-      DOM.fanSvg.classList.remove('fast');
-    } else {
+    if (fanOn || status === 'EVACUATE' || status === 'WARNING') {
       DOM.fanStateTitle.textContent = 'VENTILATION: EMERGENCY PURGE';
       DOM.fanDutyCycle.textContent = 'Status: Forced 100% Full Spool';
       DOM.fanDutyCycle.style.color = '#ff1744';
       DOM.fanSvg.classList.add('fast');
-    }
-  }
-
-  // ==========================================================================
-  // 6. REAL-TIME DATA TICK & ESP32 POLLING ENGINE
-  // ==========================================================================
-
-  // Smooth random walk around current values to create realistic sensor jitter
-  function tickSensorNoise() {
-    if (State.pollingEnabled) return; // In real hardware mode, don't generate synthetic noise
-
-    // Jitter depending on current status
-    const jitter = (val, delta, min, max) => {
-      const step = (Math.random() - 0.5) * delta;
-      return Math.max(min, Math.min(max, val + step));
-    };
-
-    if (State.status === 'SAFE') {
-      State.methane = jitter(State.methane, 14, 250, 600);
-      State.co = jitter(State.co, 2, 8, 35);
-      State.mq135 = jitter(State.mq135, 6, 80, 220);
-      State.temperature = jitter(State.temperature, 0.2, 24, 31);
-      State.humidity = jitter(State.humidity, 0.4, 48, 65);
-    } else if (State.status === 'WARNING') {
-      State.methane = jitter(State.methane, 35, 1100, 2100);
-      State.co = jitter(State.co, 6, 60, 160);
-      State.mq135 = jitter(State.mq135, 20, 350, 750);
-      State.temperature = jitter(State.temperature, 0.3, 36, 42);
-      State.humidity = jitter(State.humidity, 0.6, 60, 78);
     } else {
-      // Emergency
-      State.methane = jitter(State.methane, 50, 2600, 3900);
-      State.co = jitter(State.co, 15, 220, 750);
-      State.mq135 = jitter(State.mq135, 30, 850, 1800);
-      State.temperature = jitter(State.temperature, 0.4, 46, 54);
-      State.humidity = jitter(State.humidity, 0.8, 65, 88);
+      DOM.fanStateTitle.textContent = 'VENTILATION: NORMAL';
+      DOM.fanDutyCycle.textContent = 'Status: Baseline 40% RPM';
+      DOM.fanDutyCycle.style.color = 'var(--safe-green)';
+      DOM.fanSvg.classList.remove('fast');
     }
-
-    // Push into sparklines history (max 10 points)
-    const pushHist = (arr, val) => {
-      arr.push(val);
-      if (arr.length > 10) arr.shift();
-    };
-    pushHist(State.history.mq4, State.methane);
-    pushHist(State.history.mq7, State.co);
-    pushHist(State.history.mq135, State.mq135);
-    pushHist(State.history.temp, State.temperature);
-    pushHist(State.history.hum, State.humidity);
-
-    renderUI();
   }
 
-  // Poll real or mock ESP32 REST Endpoint
+  // ==========================================================================
+  // 6. REAL-TIME TELEMETRY POLLING & FAIL-SAFE ENGINE
+  // ==========================================================================
+  let isPolling = false;
   let lastLoggedTrigger = null;
 
   async function pollEsp32Data() {
+    if (!State.pollingEnabled || isPolling) return;
+    isPolling = true;
+
     const url = State.apiEndpoint || '/api/esp32/data';
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s fetch timeout
+
     try {
-      const resp = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
-      if (!resp.ok) throw new Error(`HTTP error ${resp.status}`);
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
 
-      // Check if rich ESP32 payload
-      if (data.online !== undefined) {
-        State.esp32Online = data.online;
-        State.esp32DeviceId = data.device_id || 'ESP32_M1';
-        State.esp32LastSeen = data.last_seen_timestamp || 'Active';
-        State.esp32LastSeenSec = data.last_seen_seconds_ago;
-        State.esp32TriggerSensor = data.trigger_sensor || 'None (All Nominal)';
+      State.esp32Online = Boolean(data.online);
+      State.activeNodesCount = data.active_nodes_count || (data.online ? 1 : 0);
+      State.nodes = data.nodes || {};
+
+      if (data.online) {
+        State.mode = 'LIVE';
+        State.node_id = data.node_id || 'ESP32_M1';
+        State.zone = data.zone || 'M1';
+        State.location = data.location || `Mine Zone ${State.zone}`;
+
+        // Ingest Data Contract fields from server authority
+        State.methane = Number(data.methane !== null && data.methane !== undefined ? data.methane : 0);
+        State.co = Number(data.co !== null && data.co !== undefined ? data.co : 0);
+        State.toxic = Number(data.toxic !== null && data.toxic !== undefined ? data.toxic : 0);
+        State.temp = data.temp !== null && data.temp !== undefined ? Number(data.temp) : null;
+        State.humidity = data.humidity !== null && data.humidity !== undefined ? Number(data.humidity) : null;
+        State.alarm_level = String(data.alarm_level || data.status || 'SAFE').toUpperCase();
+        State.fan_on = Boolean(data.fan_on);
+        State.uptime = Number(data.uptime || 0);
+
+        // Server-Authoritative Status & Risk Score (NEVER recomputed by client)
+        State.serverRiskScore = Number(data.risk_score || 0);
         State.esp32RiskLevel = data.risk_level || 'LOW';
+        State.status = data.status || 'SAFE';
+        State.safeRoute = data.safeRoute || 'M1 ➔ MAIN EXIT';
+        State.routes = data.routes || {};
+        State.zones = data.zones || {};
+        State.contaminatedZones = data.contaminated_zones || data.hazard_zones || [];
+        State.esp32TriggerSensor = data.trigger_sensor || 'None (All Nominal)';
+        State.esp32LastSeenSec = data.last_seen_seconds_ago !== undefined ? data.last_seen_seconds_ago : 0;
+        State.esp32LastSeenTimestamp = data.last_seen_timestamp || 'Active';
+        State.riskComponents = data.risk_components || {};
 
-        if (data.online) {
-          if (data.zone) State.zone = data.zone;
-          if (data.location) State.location = data.location;
-          if (data.mq4 !== undefined) State.methane = Number(data.mq4);
-          if (data.mq7 !== undefined) State.co = Number(data.mq7);
-          if (data.mq135 !== undefined) State.mq135 = Number(data.mq135);
-          if (data.temperature !== undefined) State.temperature = Number(data.temperature);
-          if (data.humidity !== undefined) State.humidity = Number(data.humidity);
-          if (data.safeRoute) State.safeRoute = data.safeRoute;
+        // Find primary danger zone from contaminated list
+        State.dangerZone = State.contaminatedZones.length > 0 ? State.contaminatedZones[0] : null;
 
-          // Alert Center update if trigger sensor changed
-          if (data.trigger_sensor && data.trigger_sensor !== 'None (All Nominal)' && data.trigger_sensor !== lastLoggedTrigger) {
-            lastLoggedTrigger = data.trigger_sensor;
-            addAlertItem(data.status === 'EMERGENCY' ? 'red' : 'yellow',
-                         `ALERT: ${data.trigger_sensor}`,
-                         `Zone ${State.zone} telemetry breached safety ceiling. Dispatched via ${State.esp32DeviceId}.`);
-          } else if (data.trigger_sensor === 'None (All Nominal)' && lastLoggedTrigger !== null) {
-            lastLoggedTrigger = null;
-          }
+        // Trigger notifications
+        if (data.trigger_sensor && data.trigger_sensor !== 'None (All Nominal)' && data.trigger_sensor !== lastLoggedTrigger) {
+          lastLoggedTrigger = data.trigger_sensor;
+          addAlertItem(data.status === 'EVACUATE' ? 'red' : 'yellow',
+                       `ALERT: ${data.trigger_sensor}`,
+                       `Zone ${State.zone} threshold breached. Dispatched via ${State.node_id}.`);
+        } else if (data.trigger_sensor === 'None (All Nominal)' && lastLoggedTrigger !== null) {
+          lastLoggedTrigger = null;
+        }
 
-          // Push sparklines history
+        // Push sparkline points ONLY when last_seen timestamp advances
+        if (data.last_seen_timestamp && data.last_seen_timestamp !== State.lastPushedTimestamp) {
+          State.lastPushedTimestamp = data.last_seen_timestamp;
           const pushHist = (arr, val) => {
             arr.push(val);
             if (arr.length > 10) arr.shift();
           };
           pushHist(State.history.mq4, State.methane);
           pushHist(State.history.mq7, State.co);
-          pushHist(State.history.mq135, State.mq135);
-          pushHist(State.history.temp, State.temperature);
-          pushHist(State.history.hum, State.humidity);
+          pushHist(State.history.toxic, State.toxic);
+          if (State.temp !== null) pushHist(State.history.temp, State.temp);
+          if (State.humidity !== null) pushHist(State.history.hum, State.humidity);
         }
+
+        updateSparklines();
+
+        DOM.sysStatusDot.className = 'indicator-dot online';
+        DOM.sysStatusText.textContent = 'ONLINE (LIVE)';
       } else {
-        // Compatibility with legacy /api/data
-        if (data.zone) State.zone = data.zone;
-        if (data.location) State.location = data.location;
-        if (data.methane !== undefined) State.methane = Number(data.methane);
-        if (data.co !== undefined) State.co = Number(data.co);
-        if (data.mq135 !== undefined) State.mq135 = Number(data.mq135);
-        if (data.temperature !== undefined) State.temperature = Number(data.temperature);
-        if (data.humidity !== undefined) State.humidity = Number(data.humidity);
-        if (data.safeRoute) State.safeRoute = data.safeRoute;
-        State.esp32Online = data.online || false;
+        // FAIL-SAFE: NODE IS OFFLINE (>10s)
+        State.esp32Online = false;
+        State.status = 'UNKNOWN'; // Never show SAFE
+        State.safeRoute = 'NO DATA - SENSOR OFFLINE';
+        State.esp32LastSeenSec = data.last_seen_seconds_ago || 15;
+        State.esp32LastSeenTimestamp = data.last_seen_timestamp || 'No recent signal';
+        State.esp32TriggerSensor = 'NO DATA - SENSOR OFFLINE';
+
+        DOM.sysStatusDot.className = 'indicator-dot offline';
+        DOM.sysStatusText.textContent = 'OFFLINE (>10s)';
       }
 
-      DOM.sysStatusDot.className = 'indicator-dot online';
-      DOM.sysStatusText.textContent = State.esp32Online ? 'ONLINE (ESP32)' : 'ONLINE (CLOUD)';
       renderUI();
     } catch (err) {
-      console.warn('ESP32 REST poll warning:', err.message);
-      DOM.sysStatusDot.className = 'indicator-dot offline';
-      DOM.sysStatusText.textContent = 'CONNECTING';
+      clearTimeout(timeoutId);
+      console.warn('Telemetry poll error:', err.message);
+      // FAIL-SAFE: On fetch failure or timeout, grey out and show UNKNOWN
       State.esp32Online = false;
+      State.status = 'UNKNOWN'; // Never show SAFE
+      State.safeRoute = 'NO DATA - SENSOR OFFLINE';
+      State.esp32TriggerSensor = 'NO DATA - SENSOR OFFLINE';
+      DOM.sysStatusDot.className = 'indicator-dot offline';
+      DOM.sysStatusText.textContent = 'CONNECTION ERROR';
       renderUI();
+    } finally {
+      isPolling = false;
     }
   }
 
-  // Fetch recent sensor readings from SQLite database
+  // Fetch recent history from SQLite database (Safe DOM construction, zero innerHTML)
   async function fetchSensorHistory() {
     const url = State.historyEndpoint || '/api/esp32/history';
     try {
@@ -1088,51 +1285,145 @@
       const data = await resp.json();
       if (!data.history || !DOM.historyTbody) return;
 
+      DOM.historyTbody.replaceChildren();
+
       if (data.history.length === 0) {
-        DOM.historyTbody.innerHTML = `
-          <tr>
-            <td colspan="10" style="text-align: center; color: var(--text-subtle); padding: 18px;">
-              Waiting for live ESP32 telemetry packets from Render...
-            </td>
-          </tr>
-        `;
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 10;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--text-subtle)';
+        td.style.padding = '18px';
+        td.textContent = 'Waiting for live telemetry packets...';
+        tr.appendChild(td);
+        DOM.historyTbody.appendChild(tr);
         if (DOM.historyCountLabel) DOM.historyCountLabel.textContent = '0 READINGS';
         return;
       }
 
-      DOM.historyTbody.innerHTML = '';
       data.history.forEach(item => {
-        const row = document.createElement('tr');
-        const riskClass = `badge-risk-${(item.risk_level || 'low').toLowerCase()}`;
-        const statusClass = `status-pill status-${(item.status || 'safe').toLowerCase()}`;
-        row.innerHTML = `
-          <td class="mono" style="font-size: 0.76rem;">${item.timestamp}</td>
-          <td><span class="worker-tag">${item.device_id}</span></td>
-          <td><span class="zone-pill pill-cyan">${item.zone}</span></td>
-          <td class="mono font-bold">${Math.round(item.mq4)} ppm</td>
-          <td class="mono font-bold">${Math.round(item.mq7)} ppm</td>
-          <td class="mono font-bold">${Math.round(item.mq135)} ppm</td>
-          <td class="mono">${item.temperature.toFixed(1)} °C</td>
-          <td class="mono">${Math.round(item.humidity)} %</td>
-          <td><span class="${riskClass}">${item.risk_level}</span></td>
-          <td><span class="${statusClass}">${item.status}</span></td>
-        `;
-        DOM.historyTbody.appendChild(row);
+        const tr = document.createElement('tr');
+        const st = String(item.status || 'SAFE').toLowerCase();
+        const statusClass = `status-pill status-${st === 'emergency' || st === 'evacuate' ? 'danger' : (st === 'warning' ? 'warning' : 'safe')}`;
+
+        const tdTime = document.createElement('td');
+        tdTime.className = 'mono';
+        tdTime.style.fontSize = '0.76rem';
+        tdTime.textContent = String(item.timestamp || '');
+
+        const tdNode = document.createElement('td');
+        const spanNode = document.createElement('span');
+        spanNode.className = 'worker-tag';
+        spanNode.textContent = String(item.node_id || item.device_id || 'ESP32');
+        tdNode.appendChild(spanNode);
+
+        const tdZone = document.createElement('td');
+        const spanZone = document.createElement('span');
+        spanZone.className = 'zone-pill pill-cyan';
+        spanZone.textContent = String(item.zone || 'M1');
+        tdZone.appendChild(spanZone);
+
+        const tdMq4 = document.createElement('td');
+        tdMq4.className = 'mono font-bold';
+        tdMq4.textContent = `${Math.round(item.methane || item.mq4 || 0)} ppm`;
+
+        const tdMq7 = document.createElement('td');
+        tdMq7.className = 'mono font-bold';
+        tdMq7.textContent = `${Math.round(item.co || item.mq7 || 0)} ppm`;
+
+        const tdMq135 = document.createElement('td');
+        tdMq135.className = 'mono font-bold';
+        tdMq135.textContent = `${Math.round(item.toxic || item.mq135 || 0)} ppm`;
+
+        const tdTemp = document.createElement('td');
+        tdTemp.className = 'mono';
+        tdTemp.textContent = item.temp !== null && item.temp !== undefined ? `${Number(item.temp).toFixed(1)} °C` : 'FAULT';
+
+        const tdHum = document.createElement('td');
+        tdHum.className = 'mono';
+        tdHum.textContent = item.humidity !== null && item.humidity !== undefined ? `${Math.round(item.humidity)} %` : 'FAULT';
+
+        const tdRisk = document.createElement('td');
+        tdRisk.className = 'mono font-bold';
+        tdRisk.textContent = `${Math.round(item.risk_score || 0)}%`;
+
+        const tdStatus = document.createElement('td');
+        const spanStatus = document.createElement('span');
+        spanStatus.className = statusClass;
+        spanStatus.textContent = String(item.status || 'SAFE');
+        tdStatus.appendChild(spanStatus);
+
+        tr.appendChild(tdTime);
+        tr.appendChild(tdNode);
+        tr.appendChild(tdZone);
+        tr.appendChild(tdMq4);
+        tr.appendChild(tdMq7);
+        tr.appendChild(tdMq135);
+        tr.appendChild(tdTemp);
+        tr.appendChild(tdHum);
+        tr.appendChild(tdRisk);
+        tr.appendChild(tdStatus);
+
+        DOM.historyTbody.appendChild(tr);
       });
 
       if (DOM.historyCountLabel) {
         DOM.historyCountLabel.textContent = `${data.history.length} READINGS`;
       }
     } catch (err) {
-      console.warn('History fetch warning:', err.message);
+      console.warn('History fetch error:', err.message);
     }
   }
 
   // ==========================================================================
-  // 7. EVENT LISTENERS & DEMO CONTROLS
+  // 7. EVENT LISTENERS & DRAWER CONTROLS
   // ==========================================================================
   function setupEventListeners() {
-    // 1. Persona View Switcher
+    // 1. Browser Autoplay Audio Unlock
+    if (DOM.btnUnlockAudio) {
+      DOM.btnUnlockAudio.addEventListener('click', () => {
+        initAudio();
+        State.audioContextUnlocked = true;
+        State.soundMuted = false;
+        playBuzzerTone(900, 0.12, 'sine');
+        DOM.btnUnlockAudio.classList.add('audio-unlocked');
+        DOM.audioUnlockLabel.textContent = 'Sound Enabled';
+        DOM.soundIconOn.classList.remove('hidden');
+        DOM.soundIconOff.classList.add('hidden');
+        DOM.btnToggleSound.classList.remove('muted');
+        addAlertItem('green', 'AUDIO SUBSYSTEM UNLOCKED', 'Web Audio API initialized with browser autoplay approval.');
+      });
+    }
+
+    // 2. Tab Navigation
+    DOM.tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetTab = btn.getAttribute('data-tab');
+        if (!targetTab) return;
+
+        DOM.tabBtns.forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-selected', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+
+        Object.keys(DOM.tabPanels).forEach(key => {
+          const panel = DOM.tabPanels[key];
+          if (panel) {
+            if (key === targetTab) {
+              panel.classList.remove('hidden');
+            } else {
+              panel.classList.add('hidden');
+            }
+          }
+        });
+
+        State.activeTab = targetTab;
+      });
+    });
+
+    // 3. Persona Switcher
     DOM.viewModeControl.addEventListener('click', () => {
       State.viewMode = 'control-room';
       DOM.viewModeControl.classList.add('active');
@@ -1147,7 +1438,7 @@
       renderUI();
     });
 
-    // 2. Sound Siren Toggle
+    // 4. Sound Siren Mute Toggle
     DOM.btnToggleSound.addEventListener('click', () => {
       State.soundMuted = !State.soundMuted;
       DOM.soundIconOn.classList.toggle('hidden', State.soundMuted);
@@ -1159,99 +1450,91 @@
       }
     });
 
-    DOM.btnSilenceAlarm.addEventListener('click', () => {
-      State.soundMuted = true;
-      DOM.soundIconOn.classList.add('hidden');
-      DOM.soundIconOff.classList.remove('hidden');
-      DOM.btnToggleSound.classList.add('muted');
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
-    });
+    // 5. Silence Button: 2-Minute Snooze that re-arms on escalation
+    if (DOM.btnSilenceAlarm) {
+      DOM.btnSilenceAlarm.addEventListener('click', () => {
+        State.silenceUntil = Date.now() + 120000; // 2 minutes
+        State.soundMuted = true;
+        DOM.soundIconOn.classList.add('hidden');
+        DOM.soundIconOff.classList.remove('hidden');
+        DOM.btnToggleSound.classList.add('muted');
+        DOM.btnSilenceAlarm.textContent = 'Snoozed (2m)';
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        addAlertItem('yellow', 'AUDIBLE ALARM SNOOZED', 'Siren snoozed for 2 minutes. Will re-arm immediately if hazard level escalates.');
+      });
+    }
 
-    // 3. Manual Evacuation & Normal Reset Buttons
+    // 6. Manual Overrides
     DOM.btnManualEvac.addEventListener('click', () => {
+      State.mode = 'DEMO';
       State.methane = 3200;
       State.co = 350;
       State.zone = 'M2';
+      State.status = 'EVACUATE';
+      State.dangerZone = 'M2';
+      State.contaminatedZones = ['M2'];
+      State.safeRoute = bfsFindRoute(State.zone, ['M2']);
       renderUI();
     });
 
     DOM.btnResetNormal.addEventListener('click', () => {
+      State.mode = 'DEMO';
       State.methane = 420;
       State.co = 18;
-      State.mq135 = 110;
-      State.temperature = 27.4;
+      State.toxic = 110;
+      State.temp = 27.4;
       State.humidity = 58;
       State.zone = 'M1';
+      State.status = 'SAFE';
+      State.dangerZone = null;
+      State.contaminatedZones = [];
+      State.safeRoute = bfsFindRoute('M1', []);
       renderUI();
     });
 
-    // 4. Modal Open/Close
-    DOM.btnOpenSim.addEventListener('click', () => {
+    // 7. Developer Drawer Controls
+    const openDevDrawer = () => {
       syncSlidersToState();
-      DOM.simModal.classList.remove('hidden');
-    });
+      DOM.devDrawerPanel.classList.add('open');
+      DOM.devDrawerBackdrop.classList.add('open');
+    };
 
-    const closeModal = () => DOM.simModal.classList.add('hidden');
-    DOM.btnCloseSim.addEventListener('click', closeModal);
-    DOM.btnCloseSimFooter.addEventListener('click', closeModal);
-    DOM.simModal.addEventListener('click', (e) => {
-      if (e.target === DOM.simModal) closeModal();
-    });
+    const closeDevDrawer = () => {
+      DOM.devDrawerPanel.classList.remove('open');
+      DOM.devDrawerBackdrop.classList.remove('open');
+    };
 
-    // 5. Preset Demo Scenarios
-    DOM.scenNormal.addEventListener('click', () => {
-      State.zone = 'M1';
-      State.location = 'Mine Zone M1';
-      State.methane = 420;
-      State.co = 18;
-      State.mq135 = 110;
-      State.temperature = 27.4;
-      State.humidity = 58;
-      syncSlidersToState();
-      renderUI();
-      closeModal();
-    });
+    if (DOM.btnToggleDevDrawer) DOM.btnToggleDevDrawer.addEventListener('click', openDevDrawer);
+    if (DOM.btnCloseDevDrawer) DOM.btnCloseDevDrawer.addEventListener('click', closeDevDrawer);
+    if (DOM.devDrawerBackdrop) DOM.devDrawerBackdrop.addEventListener('click', closeDevDrawer);
 
-    DOM.scenWarning.addEventListener('click', () => {
-      State.zone = 'M2';
-      State.location = 'Mine Zone M2';
-      State.methane = 1800;
-      State.co = 65;
-      State.mq135 = 450;
-      State.temperature = 38.0;
-      State.humidity = 65;
+    // 8. Demo Preset Scenarios (Clearly labeled DEMO mode)
+    const applyPreset = (presetName, m, c, tox, t, h, z, status) => {
+      State.mode = 'DEMO';
+      State.methane = m;
+      State.co = c;
+      State.toxic = tox;
+      State.temp = t;
+      State.humidity = h;
+      State.zone = z;
+      State.location = `Mine Zone ${z}`;
+      State.status = status;
+      State.dangerZone = (status === 'EVACUATE' || status === 'WARNING') ? z : null;
+      State.contaminatedZones = State.dangerZone ? [State.dangerZone] : [];
+      State.safeRoute = bfsFindRoute(z, State.contaminatedZones);
       syncSlidersToState();
       renderUI();
-      closeModal();
-    });
+      closeDevDrawer();
+      addAlertItem(status === 'EVACUATE' ? 'red' : (status === 'WARNING' ? 'yellow' : 'green'),
+                   `DEMO SCENARIO: ${presetName}`, `Simulated laboratory preset applied.`);
+    };
 
-    DOM.scenEmergency.addEventListener('click', () => {
-      State.zone = 'M2';
-      State.location = 'Mine Zone M2';
-      State.methane = 2800;
-      State.co = 95;
-      State.mq135 = 920;
-      State.temperature = 39.5;
-      State.humidity = 70;
-      syncSlidersToState();
-      renderUI();
-      closeModal();
-    });
+    DOM.scenNormal.addEventListener('click', () => applyPreset('NORMAL / SAFE', 420, 18, 110, 27.4, 58, 'M1', 'SAFE'));
+    DOM.scenWarning.addEventListener('click', () => applyPreset('WARNING CONDITION', 1800, 65, 450, 38.0, 65, 'M2', 'WARNING'));
+    DOM.scenEmergency.addEventListener('click', () => applyPreset('CRITICAL METHANE LEAK', 2900, 95, 920, 39.5, 70, 'M2', 'EVACUATE'));
+    DOM.scenToxic.addEventListener('click', () => applyPreset('TOXIC CO EMERGENCY', 650, 350, 1450, 47.0, 82, 'M3', 'EVACUATE'));
 
-    DOM.scenToxic.addEventListener('click', () => {
-      State.zone = 'M3';
-      State.location = 'Mine Zone M3';
-      State.methane = 1400;
-      State.co = 650;
-      State.mq135 = 1450;
-      State.temperature = 47.0;
-      State.humidity = 82;
-      syncSlidersToState();
-      renderUI();
-      closeModal();
-    });
-
-    // 6. Sliders Synchronizer
+    // 9. Sliders Synchronizer
     function syncSlidersToState() {
       DOM.inputMq4.value = Math.round(State.methane);
       DOM.valSliderMq4.textContent = Math.round(State.methane);
@@ -1259,14 +1542,14 @@
       DOM.inputMq7.value = Math.round(State.co);
       DOM.valSliderMq7.textContent = Math.round(State.co);
 
-      DOM.inputMq135.value = Math.round(State.mq135);
-      DOM.valSliderMq135.textContent = Math.round(State.mq135);
+      DOM.inputMq135.value = Math.round(State.toxic);
+      DOM.valSliderMq135.textContent = Math.round(State.toxic);
 
-      DOM.inputTemp.value = State.temperature.toFixed(1);
-      DOM.valSliderTemp.textContent = State.temperature.toFixed(1);
+      DOM.inputTemp.value = State.temp ? Number(State.temp).toFixed(1) : 25;
+      DOM.valSliderTemp.textContent = State.temp ? Number(State.temp).toFixed(1) : 25;
 
-      DOM.inputHum.value = Math.round(State.humidity);
-      DOM.valSliderHum.textContent = Math.round(State.humidity);
+      DOM.inputHum.value = State.humidity ? Math.round(State.humidity) : 50;
+      DOM.valSliderHum.textContent = State.humidity ? Math.round(State.humidity) : 50;
 
       DOM.selectActiveZone.value = State.zone;
     }
@@ -1278,18 +1561,33 @@
     DOM.inputHum.addEventListener('input', (e) => DOM.valSliderHum.textContent = e.target.value);
 
     DOM.btnApplySliders.addEventListener('click', () => {
+      State.mode = 'DEMO';
       State.methane = Number(DOM.inputMq4.value);
       State.co = Number(DOM.inputMq7.value);
-      State.mq135 = Number(DOM.inputMq135.value);
-      State.temperature = Number(DOM.inputTemp.value);
+      State.toxic = Number(DOM.inputMq135.value);
+      State.temp = Number(DOM.inputTemp.value);
       State.humidity = Number(DOM.inputHum.value);
       State.zone = DOM.selectActiveZone.value;
       State.location = `Mine Zone ${State.zone}`;
+
+      // Local demo evaluation
+      let st = 'SAFE';
+      if (State.methane >= THRESHOLDS.methane.danger || State.co >= THRESHOLDS.co.danger ||
+          State.toxic >= THRESHOLDS.toxic.danger || State.temp >= THRESHOLDS.temp.danger) {
+        st = 'EVACUATE';
+      } else if (State.methane >= THRESHOLDS.methane.warn || State.co >= THRESHOLDS.co.warn ||
+                 State.toxic >= THRESHOLDS.toxic.warn || State.temp >= THRESHOLDS.temp.warn) {
+        st = 'WARNING';
+      }
+      State.status = st;
+      State.dangerZone = st !== 'SAFE' ? State.zone : null;
+      State.contaminatedZones = State.dangerZone ? [State.dangerZone] : [];
+      State.safeRoute = bfsFindRoute(State.zone, State.contaminatedZones);
       renderUI();
-      closeModal();
+      closeDevDrawer();
     });
 
-    // 7. Polling Toggles
+    // 10. Polling Toggles
     DOM.checkPolling.addEventListener('change', (e) => {
       State.pollingEnabled = e.target.checked;
       State.apiEndpoint = DOM.espEndpointInput.value;
@@ -1303,18 +1601,7 @@
       pollEsp32Data();
     });
 
-    // 8. Map Zone Click Inspect
-    document.querySelectorAll('.map-zone').forEach(z => {
-      z.addEventListener('click', () => {
-        const zoneId = z.getAttribute('data-zone');
-        if (zoneId && zoneId !== 'EXIT') {
-          State.zone = zoneId;
-          State.location = `Mine Zone ${zoneId}`;
-          renderUI();
-        }
-      });
-    });
-
+    // 11. Map Zone Filter Buttons
     document.querySelectorAll('.btn-zone-filter').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.btn-zone-filter').forEach(b => b.classList.remove('active'));
@@ -1323,18 +1610,24 @@
         if (selZone) {
           State.zone = selZone;
           State.location = `Mine Zone ${selZone}`;
+          // Update route for selected zone
+          if (State.routes && State.routes[selZone]) {
+            State.safeRoute = State.routes[selZone];
+          } else {
+            State.safeRoute = bfsFindRoute(selZone, State.contaminatedZones);
+          }
           renderUI();
         }
       });
     });
 
-    // 9. Clear Alert Log
+    // 12. Clear Alerts
     DOM.btnClearAlerts.addEventListener('click', () => {
       State.alerts = [];
       renderAlerts();
     });
 
-    // 10. Open Source Info Modal & Telemetry JSON Export
+    // 13. Open Source Modal & JSON Export
     const openOsModal = () => DOM.osModal.classList.remove('hidden');
     const closeOsModal = () => DOM.osModal.classList.add('hidden');
 
@@ -1351,22 +1644,25 @@
     function exportTelemetryJson() {
       const snapshot = {
         meta: {
-          project: "AI-Based Mine Gas Leakage Detection and Smart Evacuation System",
+          project: "Smart Mine Safety Control Center",
           license: "MIT License",
           timestamp: new Date().toISOString(),
-          version: "2.4.0"
+          version: "3.0.0",
+          disclaimer: "Educational prototype. Demo values only. Not intrinsically-safe certified equipment."
         },
         telemetry: {
+          node_id: State.node_id,
           zone: State.zone,
           location: State.location,
           methane_ppm: Math.round(State.methane),
           co_ppm: Math.round(State.co),
-          mq135_aqi_ppm: Math.round(State.mq135),
-          temperature_c: Number(State.temperature.toFixed(1)),
-          humidity_percent: Math.round(State.humidity),
+          toxic_ppm: Math.round(State.toxic),
+          temp_c: State.temp !== null ? Number(State.temp.toFixed(1)) : null,
+          humidity_percent: State.humidity !== null ? Math.round(State.humidity) : null,
           status: State.status,
           dangerZone: State.dangerZone,
-          safeRoute: State.safeRoute
+          safeRoute: State.safeRoute,
+          risk_score: State.serverRiskScore
         },
         workers: State.workers,
         recentEvents: State.alerts.slice(0, 10)
@@ -1389,48 +1685,74 @@
   }
 
   // ==========================================================================
-  // 8. INITIALIZATION
+  // 8. PROTOCOL DETECTION (file:// Detection)
+  // ==========================================================================
+  function checkProtocol() {
+    if (window.location.protocol === 'file:') {
+      const banner = document.createElement('div');
+      banner.id = 'file-protocol-warning';
+      banner.className = 'file-protocol-warning';
+      banner.style.cssText = 'background: #b91c1c; color: #fff; padding: 14px 20px; font-weight: 700; text-align: center; border-bottom: 2px solid #ef4444; z-index: 999999; font-size: 0.95rem; line-height: 1.4;';
+      banner.textContent = '⚠️ OPEN VIA SERVER: Dashboard is currently loaded via file:// protocol. Local browser security blocks REST API requests. Please run "python esp32_mock_server.py 5000" and navigate to http://localhost:5000/ to access live telemetry and avoid offline fail-safe.';
+      document.body.prepend(banner);
+    }
+  }
+
+  // ==========================================================================
+  // 9. INITIALIZATION & TIMERS
   // ==========================================================================
   function init() {
+    checkProtocol();
     setupEventListeners();
     renderAlerts();
     renderUI();
 
-    // Initial fetch of live ESP32 data and SQLite history
-    if (State.pollingEnabled) {
-      pollEsp32Data();
-      fetchSensorHistory();
-    }
+    // Default to LIVE mode: Immediate fetch
+    pollEsp32Data();
+    fetchSensorHistory();
 
-    // Regular interval: cadence for live ESP32 polling or sensor simulation
+    // High-frequency polling (every 2.0 seconds) to match firmware transmission rate
     setInterval(() => {
-      if (State.pollingEnabled) {
-        pollEsp32Data();
-      } else {
-        tickSensorNoise();
-      }
-    }, 2500);
+      pollEsp32Data();
+    }, 2000);
 
-    // Periodic sensor history refresh from SQLite database
+    // Heartbeat second-counter for update age and snooze countdown
+    setInterval(() => {
+      if (State.esp32LastSeenSec !== null && State.esp32Online) {
+        State.esp32LastSeenSec += 1;
+        if (State.esp32LastSeenSec > 10 && State.mode !== 'DEMO') {
+          // Exceeded fail-safe 10s offline threshold!
+          State.esp32Online = false;
+          State.status = 'UNKNOWN'; // Never show SAFE
+          State.safeRoute = 'NO DATA - SENSOR OFFLINE';
+        }
+        renderUI();
+      }
+
+      // Snooze timer countdown check
+      if (State.silenceUntil > 0) {
+        if (Date.now() >= State.silenceUntil) {
+          State.silenceUntil = 0;
+          if (DOM.btnSilenceAlarm) DOM.btnSilenceAlarm.textContent = 'Silence Siren';
+          // Re-arm sound if still hazardous
+          if (State.audioContextUnlocked && (State.status === 'WARNING' || State.status === 'EVACUATE')) {
+            State.soundMuted = false;
+            if (DOM.soundIconOn) DOM.soundIconOn.classList.remove('hidden');
+            if (DOM.soundIconOff) DOM.soundIconOff.classList.add('hidden');
+            if (DOM.btnToggleSound) DOM.btnToggleSound.classList.remove('muted');
+          }
+        }
+      }
+    }, 1000);
+
+    // History refresh from SQLite (every 5 seconds)
     setInterval(() => {
       if (State.pollingEnabled) {
         fetchSensorHistory();
       }
     }, 5000);
-
-    // Periodic buzzer pulse cadence check (every 8 seconds for heartbeat)
-    setInterval(() => {
-      if (State.status === 'SAFE') {
-        triggerBuzzerCadence('SAFE');
-      } else if (State.status === 'WARNING') {
-        triggerBuzzerCadence('WARNING');
-      } else if (State.status === 'EMERGENCY') {
-        triggerBuzzerCadence('EMERGENCY');
-      }
-    }, 8000);
   }
 
-  // Launch when DOM is ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
